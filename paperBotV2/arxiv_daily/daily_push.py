@@ -34,7 +34,9 @@ KEYWORD_WEIGHTS = {
     "llm": 2,
     "agent": 1,
 }
-ARXIV_ID_PATTERN = re.compile(r"arxiv\.org/(?:abs|pdf)/([^/?#]+)", re.IGNORECASE)
+ARXIV_ID_PATTERN = re.compile(
+    r"arxiv\.org/(?:abs|pdf)/([^\s/?#]+)", re.IGNORECASE
+)
 
 
 def _parse_datetime(value: str) -> datetime:
