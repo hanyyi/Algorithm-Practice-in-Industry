@@ -19,6 +19,7 @@ from paperBotV2.conf_summary.daily_push import (
 from paperBotV2.feishu import send_card
 from paperBotV2.github_models import enrich_chinese
 from paperBotV2.industry_practice.daily_push import load_articles, select_articles
+from paperBotV2.metrics import canonical_url, fetch_hn_metrics, fetch_s2_metrics
 
 
 class IndustryPushTests(unittest.TestCase):
@@ -36,22 +37,40 @@ class IndustryPushTests(unittest.TestCase):
         self.assertEqual(articles[0]["tags"], ["推荐", "搜索"])
         self.assertEqual(articles[1]["company"], "乙")
 
-    def test_selects_newest_articles_and_is_filterable(self):
+    def test_selects_weekly_articles_by_public_metrics(self):
         articles = [
             {
                 "title": f"A{i}",
                 "link": f"https://example.com/{i}",
                 "tags": ["推荐"],
-                "date": f"2026-08-{i + 1:02d}",
+                "date": f"2026-08-{i + 2:02d}",
+                "hn_points": i,
+                "hn_comments": i * 2,
             }
-            for i in range(8)
-        ] + [{"title": "Search", "link": "https://example.com/search", "tags": ["搜索"]}]
-        first = select_articles(articles, date(2026, 8, 5), 3, {"推荐"})
-        second = select_articles(articles, date(2026, 8, 5), 3, {"推荐"})
+            for i in range(7)
+        ] + [
+            {
+                "title": "Future",
+                "link": "https://example.com/future",
+                "tags": ["推荐"],
+                "date": "2026-08-09",
+                "hn_points": 999,
+            },
+            {
+                "title": "Old",
+                "link": "https://example.com/old",
+                "tags": ["推荐"],
+                "date": "2026-08-01",
+                "hn_points": 999,
+            },
+        ]
+        first = select_articles(articles, date(2026, 8, 8), 3, {"推荐"}, 7)
+        second = select_articles(articles, date(2026, 8, 8), 3, {"推荐"}, 7)
         self.assertEqual(first, second)
         self.assertEqual(len(first), 3)
         self.assertTrue(all("推荐" in item["tags"] for item in first))
-        self.assertEqual([item["date"] for item in first], ["2026-08-08", "2026-08-07", "2026-08-06"])
+        self.assertEqual([item["hn_points"] for item in first], [6, 5, 4])
+        self.assertTrue(all("2026-08-02" <= item["date"] <= "2026-08-08" for item in first))
 
 
 class ConferencePushTests(unittest.TestCase):
@@ -64,22 +83,34 @@ class ConferencePushTests(unittest.TestCase):
 
     def test_selects_relevant_recent_conference_papers(self):
         results = {
-            "kdd2025": [
-                {"paper_name": "Large-Scale Recommendation Ranking", "paper_url": "https://example.com/a"},
+            "kdd2026": [
+                {
+                    "paper_name": "Large-Scale Recommendation Ranking",
+                    "paper_url": "https://example.com/a",
+                    "publication_date": "2026-08-02",
+                    "citation_count": 3,
+                },
+                {
+                    "paper_name": "Old Recommendation Ranking",
+                    "paper_url": "https://example.com/old",
+                    "publication_date": "2026-07-01",
+                    "citation_count": 100,
+                },
                 {"paper_name": "Unrelated Geometry", "paper_url": "https://example.com/b"},
             ],
-            "acl2025": [{"paper_name": "Search and Retrieval", "paper_url": "https://example.com/c"}],
+            "acl2026": [{"paper_name": "Search and Retrieval", "paper_url": "https://example.com/c"}],
             "sigir2020": [{"paper_name": "Old Search", "paper_url": "https://example.com/d"}],
         }
         candidates = conference_candidates(results, {"kdd", "sigir"}, 2021)
         selected = select_papers(candidates, date(2026, 8, 5), 3)
-        self.assertEqual(len(candidates), 1)
+        self.assertEqual(len(candidates), 2)
+        self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0]["conference"], "KDD")
-        self.assertIn("KDD 2025", build_conf_markdown(selected))
+        self.assertIn("KDD 2026", build_conf_markdown(selected))
 
 
 class ArxivPushTests(unittest.TestCase):
-    def test_prefers_recent_relevant_papers_and_deduplicates(self):
+    def test_requires_weekly_dates_and_prioritizes_public_metrics(self):
         now = datetime(2026, 8, 5, tzinfo=timezone.utc)
         papers = [
             {
@@ -89,14 +120,16 @@ class ArxivPushTests(unittest.TestCase):
                 "url": "https://arxiv.org/abs/1",
                 "published": now - timedelta(hours=3),
                 "categories": ["cs.IR"],
+                "citation_count": 0,
             },
             {
-                "id": "generic",
-                "title": "A Generic Learning Method",
-                "summary": "Learning",
+                "id": "cited",
+                "title": "A Cited Learning Method",
+                "summary": "Learning method",
                 "url": "https://arxiv.org/abs/2",
-                "published": now - timedelta(hours=1),
+                "published": now - timedelta(days=2),
                 "categories": ["cs.LG"],
+                "citation_count": 2,
             },
             {
                 "id": "old",
@@ -105,14 +138,76 @@ class ArxivPushTests(unittest.TestCase):
                 "url": "https://arxiv.org/abs/3",
                 "published": now - timedelta(days=30),
                 "categories": ["cs.IR"],
+                "citation_count": 100,
+            },
+            {
+                "id": "future",
+                "title": "Future Recommendation Paper",
+                "summary": "Recommendation",
+                "url": "https://arxiv.org/abs/4",
+                "published": now + timedelta(hours=1),
+                "categories": ["cs.IR"],
+                "citation_count": 100,
+            },
+            {
+                "id": "undated",
+                "title": "Undated Recommendation Paper",
+                "summary": "Recommendation",
+                "url": "https://arxiv.org/abs/5",
+                "published": None,
+                "categories": ["cs.IR"],
+                "citation_count": 100,
             },
         ]
         papers.append(dict(papers[0]))
 
         selected = select_arxiv_papers(papers, now, limit=5, lookback_days=7)
 
-        self.assertEqual([paper["id"] for paper in selected], ["relevant", "generic"])
-        self.assertGreater(arxiv_relevance_score(selected[0]), arxiv_relevance_score(selected[1]))
+        self.assertEqual([paper["id"] for paper in selected], ["cited", "relevant"])
+        self.assertGreater(arxiv_relevance_score(selected[1]), arxiv_relevance_score(selected[0]))
+
+
+class PublicMetricsTests(unittest.TestCase):
+    def test_canonical_url_removes_tracking(self):
+        self.assertEqual(
+            canonical_url("https://www.example.com/post/?utm_source=rss&x=1#section"),
+            "https://example.com/post?x=1",
+        )
+        self.assertEqual(canonical_url(""), "")
+
+    @patch("paperBotV2.metrics.requests.request")
+    def test_fetches_hacker_news_metrics(self, request):
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "hits": [{
+                "url": "https://example.com/post?utm_source=hn",
+                "points": 42,
+                "num_comments": 7,
+                "objectID": "123",
+            }]
+        }
+        request.return_value = response
+
+        metrics = fetch_hn_metrics(datetime(2026, 8, 1, tzinfo=timezone.utc))
+
+        self.assertEqual(metrics["https://example.com/post"]["hn_points"], 42)
+
+    @patch("paperBotV2.metrics.requests.request")
+    def test_fetches_semantic_scholar_citations(self, request):
+        response = Mock(status_code=200)
+        response.json.return_value = [{
+            "citationCount": 5,
+            "influentialCitationCount": 2,
+            "publicationDate": "2026-08-02",
+        }]
+        request.return_value = response
+
+        metrics = fetch_s2_metrics(["ARXIV:2608.00001"])
+
+        self.assertEqual(metrics["ARXIV:2608.00001"]["citation_count"], 5)
+        self.assertEqual(
+            metrics["ARXIV:2608.00001"]["influential_citation_count"], 2
+        )
 
 
 class FeishuClientTests(unittest.TestCase):
