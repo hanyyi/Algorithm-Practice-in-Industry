@@ -16,8 +16,11 @@ import requests
 from bs4 import BeautifulSoup
 
 from paperBotV2.feishu import send_card
-from paperBotV2.github_models import enrich_chinese
 from paperBotV2.metrics import attach_hn_metrics, fetch_hn_metrics
+from paperBotV2.relevance import (
+    is_recommendation_relevant,
+    recommendation_relevance_score,
+)
 
 
 DEFAULT_DATA = Path(__file__).resolve().parent / "data" / "article.json"
@@ -28,23 +31,6 @@ DEFAULT_FEEDS = {
     "Pinterest Engineering": "https://medium.com/feed/pinterest-engineering",
     "Airbnb Engineering": "https://medium.com/feed/airbnb-engineering",
 }
-INDUSTRY_KEYWORDS = (
-    "recommend",
-    "retrieval",
-    "search",
-    "ranking",
-    "advertis",
-    "personalization",
-    "machine learning",
-    "deep learning",
-    "large language model",
-    "llm",
-    "generative ai",
-    "agent",
-    "data platform",
-    "inference",
-    "feature store",
-)
 
 
 def load_articles(path: Path) -> list[dict]:
@@ -135,8 +121,9 @@ def fetch_live_articles(timeout: int = 20) -> list[dict]:
 
 
 def industry_relevance(item: dict) -> int:
-    text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
-    return sum(1 for keyword in INDUSTRY_KEYWORDS if keyword in text)
+    return recommendation_relevance_score(
+        item.get("title", ""), item.get("summary", ""), item.get("tags", [])
+    )
 
 
 def select_articles(
@@ -152,6 +139,10 @@ def select_articles(
     for item in articles:
         item_tags = {str(tag).strip() for tag in item.get("tags", [])}
         if tags and not (item_tags & tags):
+            continue
+        if not is_recommendation_relevant(
+            item.get("title", ""), item.get("summary", ""), item_tags
+        ):
             continue
         try:
             published = date.fromisoformat(str(item.get("date", ""))[:10])
@@ -183,23 +174,20 @@ def select_articles(
 def build_markdown(items: Iterable[dict]) -> str:
     blocks = []
     for item in items:
-        tags = " / ".join(str(tag) for tag in item.get("tags", [])) or "未分类"
+        tags = " / ".join(str(tag) for tag in item.get("tags", [])) or "Uncategorized"
         meta = " · ".join(
             value
-            for value in [str(item.get("company", "未知公司")), tags, str(item.get("date", ""))]
+            for value in [str(item.get("company", "Unknown company")), tags, str(item.get("date", ""))]
             if value
         )
-        title = item.get("title_zh") or item["title"]
-        block = f"**{meta}**\n[{title}]({item['link']})"
-        if item.get("title_zh") and item["title"] != item["title_zh"]:
-            block += f"\n原题：{item['title']}"
+        block = f"**{meta}**\n[{item['title']}]({item['link']})"
         block += (
-            f"\n指标：HN {int(item.get('hn_points', 0))} 分/"
-            f"{int(item.get('hn_comments', 0))} 评论"
+            f"\nMetrics: HN {int(item.get('hn_points', 0))} points/"
+            f"{int(item.get('hn_comments', 0))} comments"
         )
-        summary = item.get("summary_zh") or item.get("summary")
+        summary = item.get("summary")
         if summary:
-            block += f"\n摘要：{summary}"
+            block += f"\nSummary: {summary}"
         blocks.append(block)
     return "\n\n---\n\n".join(blocks)
 
@@ -238,8 +226,9 @@ def main() -> int:
     )
     if not recent:
         send_card(
-            f"🏭 行业实践日推 · {args.date.isoformat()}",
-            f"近 {args.lookback_days} 天暂无符合条件的新文章；未使用历史内容补位。",
+            f"🏭 Recommender Systems in Industry · {args.date.isoformat()}",
+            f"No relevant recommender-system article was published in the last "
+            f"{args.lookback_days} days; no stale content was used.",
             color="turquoise",
             dry_run=args.dry_run,
         )
@@ -257,20 +246,8 @@ def main() -> int:
         recent, args.date, args.limit, wanted_tags, args.lookback_days
     )
 
-    if not args.dry_run:
-        translations = enrich_chinese(
-            {
-                "id": str(index),
-                "title": article["title"],
-                "summary": article.get("summary", ""),
-            }
-            for index, article in enumerate(selected)
-        )
-        for index, article in enumerate(selected):
-            article.update(translations[str(index)])
-
     send_card(
-        f"🏭 行业实践日推 · {args.date.isoformat()}",
+        f"🏭 Recommender Systems in Industry · {args.date.isoformat()}",
         build_markdown(selected),
         color="turquoise",
         dry_run=args.dry_run,
