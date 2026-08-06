@@ -9,6 +9,7 @@ from paperBotV2.arxiv_daily.arxiv_feishu_msg import send_papers_to_feishu
 from paperBotV2.arxiv_daily.daily_push import (
     relevance_score as arxiv_relevance_score,
     select_papers as select_arxiv_papers,
+    semantic_scholar_id,
 )
 from paperBotV2.conf_summary.daily_push import (
     build_markdown as build_conf_markdown,
@@ -149,6 +150,13 @@ class ConferencePushTests(unittest.TestCase):
 
 
 class ArxivPushTests(unittest.TestCase):
+    def test_builds_clean_semantic_scholar_id(self):
+        paper = {
+            "url": "https://arxiv.org/abs/2608.04807v1",
+            "id": "http://arxiv.org/abs/2608.04807v1",
+        }
+        self.assertEqual(semantic_scholar_id(paper), "ARXIV:2608.04807")
+
     def test_requires_weekly_dates_and_prioritizes_public_metrics(self):
         now = datetime(2026, 8, 5, tzinfo=timezone.utc)
         papers = [
