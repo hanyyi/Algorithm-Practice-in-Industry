@@ -10,6 +10,7 @@ from typing import Iterable
 import requests
 
 from paperBotV2.feishu import send_card
+from paperBotV2.github_models import enrich_chinese
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
@@ -119,12 +120,18 @@ def build_markdown(papers: Iterable[dict]) -> str:
         if len(paper.get("authors", [])) > 5:
             authors += " et al."
         categories = " / ".join(paper.get("categories", [])[:4])
-        meta = " · ".join(value for value in [categories, authors] if value)
-        block = f"[{paper['title']}]({paper['url']})"
+        published = paper.get("published")
+        published_text = published.date().isoformat() if published else ""
+        meta = " · ".join(value for value in [published_text, categories, authors] if value)
+        display_title = paper.get("title_zh") or paper["title"]
+        block = f"[{display_title}]({paper['url']})"
+        if paper.get("title_zh"):
+            block += f"\n原题：{paper['title']}"
         if meta:
             block += f"\n{meta}"
-        if paper.get("summary"):
-            block += f"\n{_shorten(paper['summary'])}"
+        summary = paper.get("summary_zh") or paper.get("summary")
+        if summary:
+            block += f"\n摘要：{_shorten(summary)}"
         blocks.append(block)
     return "\n\n---\n\n".join(blocks)
 
@@ -155,6 +162,14 @@ def main() -> int:
     )
     if not selected:
         raise RuntimeError("no recent arXiv papers matched the configured categories")
+
+    if not args.dry_run:
+        translations = enrich_chinese(
+            {"id": paper["id"], "title": paper["title"], "summary": paper["summary"]}
+            for paper in selected
+        )
+        for paper in selected:
+            paper.update(translations[paper["id"]])
 
     send_card(
         f"📚 arXiv 论文日推 · {date.today().isoformat()}",
