@@ -11,29 +11,15 @@ from typing import Iterable
 import requests
 
 from paperBotV2.feishu import send_card
-from paperBotV2.github_models import enrich_chinese
 from paperBotV2.metrics import attach_hn_metrics, fetch_hn_metrics, fetch_s2_metrics
+from paperBotV2.relevance import (
+    is_recommendation_relevant,
+    recommendation_relevance_score,
+)
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 DEFAULT_CATEGORIES = ("cs.IR", "cs.CL", "cs.LG")
-KEYWORD_WEIGHTS = {
-    "recommend": 5,
-    "retrieval": 5,
-    "search": 4,
-    "ranking": 4,
-    "recommender": 5,
-    "advertising": 4,
-    "ads": 3,
-    "click-through": 4,
-    "ctr": 3,
-    "information retrieval": 5,
-    "user modeling": 3,
-    "personalization": 3,
-    "large language model": 2,
-    "llm": 2,
-    "agent": 1,
-}
 ARXIV_ID_PATTERN = re.compile(
     r"arxiv\.org/(?:abs|pdf)/([^\s/?#]+)", re.IGNORECASE
 )
@@ -58,14 +44,9 @@ def normalize_entry(entry) -> dict:
 
 
 def relevance_score(paper: dict) -> int:
-    text = f"{paper.get('title', '')} {paper.get('summary', '')}".lower()
-    score = sum(weight for keyword, weight in KEYWORD_WEIGHTS.items() if keyword in text)
-    categories = set(paper.get("categories", []))
-    if "cs.IR" in categories:
-        score += 3
-    if "cs.CL" in categories or "cs.LG" in categories:
-        score += 1
-    return score
+    return recommendation_relevance_score(
+        paper.get("title", ""), paper.get("summary", ""), paper.get("categories", [])
+    )
 
 
 def semantic_scholar_id(paper: dict) -> str:
@@ -83,6 +64,12 @@ def select_papers(
     unique = {}
     for paper in papers:
         if not paper.get("title") or not paper.get("url"):
+            continue
+        if not is_recommendation_relevant(
+            paper.get("title", ""),
+            paper.get("summary", ""),
+            paper.get("categories", []),
+        ):
             continue
         published = paper.get("published")
         if not published or published < cutoff or published > now:
@@ -141,20 +128,17 @@ def build_markdown(papers: Iterable[dict]) -> str:
         published = paper.get("published")
         published_text = published.date().isoformat() if published else ""
         meta = " · ".join(value for value in [published_text, categories, authors] if value)
-        display_title = paper.get("title_zh") or paper["title"]
-        block = f"[{display_title}]({paper['url']})"
-        if paper.get("title_zh"):
-            block += f"\n原题：{paper['title']}"
+        block = f"[{paper['title']}]({paper['url']})"
         if meta:
             block += f"\n{meta}"
         block += (
-            f"\n指标：引用 {int(paper.get('citation_count', 0))} · "
-            f"高影响引用 {int(paper.get('influential_citation_count', 0))} · "
-            f"HN {int(paper.get('hn_points', 0))} 分/{int(paper.get('hn_comments', 0))} 评论"
+            f"\nMetrics: {int(paper.get('citation_count', 0))} citations · "
+            f"{int(paper.get('influential_citation_count', 0))} influential citations · "
+            f"HN {int(paper.get('hn_points', 0))} points/{int(paper.get('hn_comments', 0))} comments"
         )
-        summary = paper.get("summary_zh") or paper.get("summary")
+        summary = paper.get("summary")
         if summary:
-            block += f"\n摘要：{_shorten(summary)}"
+            block += f"\nAbstract: {_shorten(summary)}"
         blocks.append(block)
     return "\n\n---\n\n".join(blocks)
 
@@ -171,7 +155,7 @@ def parse_args() -> argparse.Namespace:
         "--categories",
         default=os.environ.get("ARXIV_CATEGORIES", ",".join(DEFAULT_CATEGORIES)),
     )
-    parser.add_argument("--max-results", type=int, default=100)
+    parser.add_argument("--max-results", type=int, default=300)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -187,7 +171,7 @@ def main() -> int:
         args.lookback_days,
     )
     if not recent:
-        raise RuntimeError("no recent arXiv papers matched the configured categories")
+        raise RuntimeError("no recent recommendation-system arXiv papers matched")
 
     metric_sources = 0
     identifiers = {paper["id"]: semantic_scholar_id(paper) for paper in recent}
@@ -210,16 +194,8 @@ def main() -> int:
         raise RuntimeError("all arXiv metric providers were unavailable")
     selected = select_papers(recent, now, args.limit, args.lookback_days)
 
-    if not args.dry_run:
-        translations = enrich_chinese(
-            {"id": paper["id"], "title": paper["title"], "summary": paper["summary"]}
-            for paper in selected
-        )
-        for paper in selected:
-            paper.update(translations[paper["id"]])
-
     send_card(
-        f"📚 arXiv 论文日推 · {date.today().isoformat()}",
+        f"📚 arXiv Recommender Papers · {date.today().isoformat()}",
         build_markdown(selected),
         color="blue",
         dry_run=args.dry_run,
