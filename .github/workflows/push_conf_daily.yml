@@ -13,7 +13,6 @@ concurrency:
 
 permissions:
   contents: read
-  models: read
 
 jobs:
   push-daily-digest:
@@ -21,8 +20,6 @@ jobs:
     timeout-minutes: 30
     env:
       FEISHU_URL: ${{ secrets.FEISHU_URL }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_MODEL: "openai/gpt-4o"
       INDUSTRY_LIMIT: "5"
       CONF_LIMIT: "3"
       ARXIV_LIMIT: "10"
