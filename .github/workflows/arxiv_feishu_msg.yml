@@ -14,8 +14,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.8"
+  PYTHON_VERSION: "3.11"
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  RETURN_PAPERS: "20"
 
 jobs:
   send_feishu_notification:
@@ -38,15 +39,18 @@ jobs:
 
       # 检出代码
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          lfs: true
+          sparse-checkout: |
+            paperBotV2
+            requirements.txt
 
       # 设置Python环境
-      - name: Set up Python 3.8
-        uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.8'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
       # 安装依赖
       - name: Install dependencies
