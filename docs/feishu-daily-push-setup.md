@@ -8,14 +8,14 @@
 | 顶会论文 | 每天美西时间 08:00（自动适配 PST/PDT） | `daily_feishu_digest` | 3 篇 |
 | arXiv 每日论文 | 每天美西时间 08:00（自动适配 PST/PDT） | `daily_feishu_digest` | 10 篇 |
 
-行业实践文章会实时读取 Netflix、Spotify、GitHub、Pinterest、Airbnb 等工程博客 RSS；arXiv 读取 cs.IR、cs.CL、cs.LG；顶会范围为 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR。三类内容都把最近 7 天作为硬门槛，旧内容不会补位。标题和原始摘要会通过公开翻译服务转换为中文，不需要额外的模型 Secret。
+行业实践文章会实时读取 Netflix、Spotify、GitHub、Pinterest、Airbnb 等工程博客 RSS；arXiv 读取 cs.IR、cs.CL、cs.LG；顶会范围为 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR。行业和 arXiv 把最近 7 天作为硬门槛；顶会优先近 7 天，不足时只用当年论文按质量补位，绝不回退到往年。标题和原始摘要会通过公开翻译服务转换为中文，不需要额外的模型 Secret。
 
 ## 数量与选取规则
 
 `10 + 5 + 3` 只是为了让单次飞书卡片适合通勤阅读而设置的默认数量，并不是质量阈值，也不是仓库限制，可以通过 `ARXIV_LIMIT`、`INDUSTRY_LIMIT` 和 `CONF_LIMIT` 修改。
 
 - 行业文章：硬过滤最近 7 天，然后按 Hacker News points、评论数、主题相关度、发布时间依次排序。没有进入 Hacker News 的文章指标为 0，再由相关度和时间决定顺序。
-- 顶会论文：通过 Semantic Scholar 核实精确发布日期并硬过滤最近 7 天，然后按引用量、高影响引用量、搜广推主题相关度和发布时间排序。近 7 天没有指定顶会新论文时发送“暂无新增”，不会用 2025 等旧论文补位。
+- 顶会论文：通过 Semantic Scholar 核实精确发布日期，优先最近 7 天并按引用量、高影响引用量、搜广推主题相关度和发布时间排序；不足默认 3 篇时，用同一套质量规则从当年论文补足。只允许当年补位，不使用往年论文。
 - arXiv：硬过滤最近 7 天，通过 Semantic Scholar 获取引用量和高影响引用量，并结合 Hacker News points/评论数排序；指标相同才比较主题相关度和发布时间。默认 10 篇是飞书卡片的阅读上限。
 
 arXiv 没有公开、稳定的逐篇下载量 API，因此当前不会伪造“下载量”；论文使用 Semantic Scholar 引用指标，行业文章使用 Hacker News 公开互动指标。刚发布的论文引用量通常都是 0，此时会继续使用公开讨论热度、相关度和发布时间作为次级信号。
@@ -58,6 +58,10 @@ Webhook 等同于群机器人的发送凭证，不要写入代码、Issue 或日
 - `INDUSTRY_TAGS`：可选，行业标签过滤，例如 `推荐,搜索,广告`。
 
 原仓库带翻译和 LLM 摘要的增强版仍可手动运行 `arxiv_daily_full`，但需要额外配置 `DEEPSEEK_API_KEY`。
+
+## 2026 顶会数据库更新
+
+`update_confs` 会在每周一美西时间 02:30 自动刷新当前年份的 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR DBLP 页面，并把新收录论文追加到 `results.json` 和 Markdown 索引。也可以在 Actions 中手动运行它并把年份设为 `2026`。尚未召开或尚未被 DBLP 收录的会议会暂时为空，后续周更会自动补齐；已有会议年份会增量去重更新，而不是因为 key 已存在就跳过。
 
 ## 本地安全预览
 
