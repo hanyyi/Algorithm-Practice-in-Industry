@@ -17,6 +17,7 @@ from paperBotV2.conf_summary.daily_push import (
     select_papers,
 )
 from paperBotV2.feishu import send_card
+from paperBotV2.github_models import enrich_chinese
 from paperBotV2.industry_practice.daily_push import load_articles, select_articles
 
 
@@ -35,9 +36,14 @@ class IndustryPushTests(unittest.TestCase):
         self.assertEqual(articles[0]["tags"], ["推荐", "搜索"])
         self.assertEqual(articles[1]["company"], "乙")
 
-    def test_daily_rotation_is_deterministic_and_filterable(self):
+    def test_selects_newest_articles_and_is_filterable(self):
         articles = [
-            {"title": f"A{i}", "link": f"https://example.com/{i}", "tags": ["推荐"]}
+            {
+                "title": f"A{i}",
+                "link": f"https://example.com/{i}",
+                "tags": ["推荐"],
+                "date": f"2026-08-{i + 1:02d}",
+            }
             for i in range(8)
         ] + [{"title": "Search", "link": "https://example.com/search", "tags": ["搜索"]}]
         first = select_articles(articles, date(2026, 8, 5), 3, {"推荐"})
@@ -45,6 +51,7 @@ class IndustryPushTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), 3)
         self.assertTrue(all("推荐" in item["tags"] for item in first))
+        self.assertEqual([item["date"] for item in first], ["2026-08-08", "2026-08-07", "2026-08-06"])
 
 
 class ConferencePushTests(unittest.TestCase):
@@ -145,6 +152,34 @@ class FeishuClientTests(unittest.TestCase):
         card = post.call_args.kwargs["json"]["card"]
         self.assertIn("arXiv 论文日推", card)
         self.assertNotIn("template_id", card)
+
+
+class GitHubModelsTests(unittest.TestCase):
+    @patch("paperBotV2.github_models.requests.post")
+    def test_parses_chinese_enrichment(self, post):
+        response = Mock(ok=True)
+        response.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "items": [{
+                            "id": "paper-1",
+                            "title_zh": "中文论文标题",
+                            "summary_zh": "中文论文摘要。",
+                        }]
+                    }, ensure_ascii=False)
+                }
+            }]
+        }
+        post.return_value = response
+
+        result = enrich_chinese(
+            [{"id": "paper-1", "title": "English title", "summary": "English abstract"}],
+            token="test-token",
+        )
+
+        self.assertEqual(result["paper-1"]["title_zh"], "中文论文标题")
+        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer test-token")
 
 
 if __name__ == "__main__":
