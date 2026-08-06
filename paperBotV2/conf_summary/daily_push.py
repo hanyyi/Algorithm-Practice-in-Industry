@@ -7,13 +7,14 @@ import hashlib
 import json
 import os
 import re
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
 
 from paperBotV2.conf_summary.conf_daily import DEFAULT_CONFS, match_score
 from paperBotV2.feishu import send_card
 from paperBotV2.github_models import enrich_chinese
+from paperBotV2.metrics import fetch_s2_metrics
 
 
 DEFAULT_DATA = Path(__file__).resolve().parent / "data" / "results.json"
@@ -62,11 +63,34 @@ def conference_candidates(
 def _stable_key(item: dict) -> tuple:
     identity = f"{item.get('conference')}\n{item.get('year')}\n{item.get('paper_name')}"
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-    return (-int(item["year"]), -float(item["match_score"]), digest)
+    try:
+        published_ordinal = date.fromisoformat(
+            str(item.get("publication_date", ""))[:10]
+        ).toordinal()
+    except ValueError:
+        published_ordinal = 0
+    return (
+        -int(item.get("citation_count", 0)),
+        -int(item.get("influential_citation_count", 0)),
+        -float(item["match_score"]),
+        -published_ordinal,
+        digest,
+    )
 
 
-def select_papers(candidates: Iterable[dict], push_date: date, limit: int) -> list[dict]:
-    ordered = sorted(candidates, key=_stable_key)
+def select_papers(
+    candidates: Iterable[dict], push_date: date, limit: int, lookback_days: int = 7
+) -> list[dict]:
+    cutoff = push_date - timedelta(days=max(1, lookback_days) - 1)
+    recent = []
+    for item in candidates:
+        try:
+            published = date.fromisoformat(str(item.get("publication_date", ""))[:10])
+        except ValueError:
+            continue
+        if cutoff <= published <= push_date:
+            recent.append(item)
+    ordered = sorted(recent, key=_stable_key)
     if not ordered or limit <= 0:
         return []
     return ordered[:limit]
@@ -102,6 +126,11 @@ def build_markdown(items: Iterable[dict]) -> str:
             block += f"\n原题：{item['paper_name']}"
         if authors_text:
             block += f"\n作者：{authors_text}"
+        block += (
+            f"\n发布日期：{item.get('publication_date', '')} · "
+            f"引用 {int(item.get('citation_count', 0))} · "
+            f"高影响引用 {int(item.get('influential_citation_count', 0))}"
+        )
         if abstract:
             block += f"\n摘要：{_shorten(str(abstract))}"
         blocks.append(block)
@@ -113,6 +142,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--limit", type=int, default=int(os.environ.get("CONF_LIMIT", "3")))
     parser.add_argument("--date", type=date.fromisoformat, default=date.today())
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=int(
+            os.environ.get("CONF_LOOKBACK_DAYS", os.environ.get("LOOKBACK_DAYS", "7"))
+        ),
+    )
     parser.add_argument(
         "--start-year",
         type=int,
@@ -127,9 +163,34 @@ def main() -> int:
     args = parse_args()
     conferences = {item.strip().lower() for item in args.confs.split(",") if item.strip()}
     candidates = conference_candidates(load_results(args.data), conferences, args.start_year)
-    selected = select_papers(candidates, args.date, args.limit)
+    cutoff = args.date - timedelta(days=max(1, args.lookback_days) - 1)
+    possible_recent = [
+        paper for paper in candidates if cutoff.year <= int(paper["year"]) <= args.date.year
+    ]
+    identifiers = {}
+    for paper in possible_recent:
+        url = str(paper.get("paper_url") or paper.get("url") or "")
+        marker = "doi.org/"
+        if marker in url.lower():
+            identifiers[id(paper)] = f"DOI:{url.lower().split(marker, 1)[1]}"
+    if identifiers:
+        s2_metrics = fetch_s2_metrics(identifiers.values())
+        for paper in possible_recent:
+            identifier = identifiers.get(id(paper), "")
+            paper.update(s2_metrics.get(identifier, {}))
+
+    selected = select_papers(
+        possible_recent, args.date, args.limit, args.lookback_days
+    )
     if not selected:
-        raise RuntimeError("no conference papers matched the configured filters")
+        send_card(
+            f"🏆 顶会论文日推 · {args.date.isoformat()}",
+            f"近 {args.lookback_days} 天暂无指定顶会新论文；未使用历史论文补位。",
+            color="purple",
+            dry_run=args.dry_run,
+        )
+        print("Selected 0 conference papers (no stale backfill)")
+        return 0
 
     if not args.dry_run:
         model_items = []
