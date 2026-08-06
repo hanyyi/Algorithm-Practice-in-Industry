@@ -6,13 +6,32 @@ env:
 
 on:
   workflow_dispatch:
+    inputs:
+      confs:
+        description: "Space-separated DBLP conference ids"
+        required: true
+        default: "kdd www cikm recsys wsdm sigir ecir"
+      year:
+        description: "Conference year to refresh"
+        required: true
+        default: "2026"
+      filter:
+        description: "Additional URL filters"
+        required: false
+        default: ""
+  schedule:
+    - cron: "30 2 * * 1"
+      timezone: "America/Los_Angeles"
   issues:
     types:
       - labeled
 
 jobs:
   update-conf-list:
-    if: github.event.label.name == 'require to update confs'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      github.event.label.name == 'require to update confs'
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -40,10 +59,29 @@ jobs:
 
 
       - name: Update conference data from the issue
+        if: github.event_name == 'issues'
         env:
           ISSUE_BODY: ${{ toJson(github.event.issue.body) }}
         run: |
           python paperBotV2/conf_summary/update_from_issue.py --issue "$ISSUE_BODY"
+
+      - name: Refresh current-year conference data
+        if: github.event_name != 'issues'
+        env:
+          CONFS_INPUT: ${{ inputs.confs }}
+          YEAR_INPUT: ${{ inputs.year }}
+          FILTER_INPUT: ${{ inputs.filter }}
+        run: |
+          confs="${CONFS_INPUT:-kdd www cikm recsys wsdm sigir ecir}"
+          year="${YEAR_INPUT:-$(date +%Y)}"
+          python paperBotV2/conf_summary/update_from_issue.py \
+            --confs "$confs" \
+            --year "$year" \
+            --filter "$FILTER_INPUT" \
+            --refresh-existing
+
+      - name: Rebuild conference Markdown indexes
+        run: |
           cd paperBotV2/conf_summary
           python convert_to_md.py
           python update_readme_papers.py
