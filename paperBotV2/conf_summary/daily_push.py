@@ -13,6 +13,7 @@ from typing import Iterable
 
 from paperBotV2.conf_summary.conf_daily import DEFAULT_CONFS, match_score
 from paperBotV2.feishu import send_card
+from paperBotV2.github_models import enrich_chinese
 
 
 DEFAULT_DATA = Path(__file__).resolve().parent / "data" / "results.json"
@@ -68,9 +69,7 @@ def select_papers(candidates: Iterable[dict], push_date: date, limit: int) -> li
     ordered = sorted(candidates, key=_stable_key)
     if not ordered or limit <= 0:
         return []
-    start = ((push_date - ROTATION_EPOCH).days * limit) % len(ordered)
-    take = min(limit, len(ordered))
-    return [ordered[(start + offset) % len(ordered)] for offset in range(take)]
+    return ordered[:limit]
 
 
 def _shorten(text: str, limit: int = 420) -> str:
@@ -81,7 +80,7 @@ def _shorten(text: str, limit: int = 420) -> str:
 def build_markdown(items: Iterable[dict]) -> str:
     blocks = []
     for item in items:
-        title = item["paper_name"]
+        title = item.get("title_zh") or item["paper_name"]
         url = item.get("paper_url") or item.get("url") or ""
         linked_title = f"[{title}]({url})" if url else title
         authors = item.get("paper_authors") or []
@@ -92,12 +91,15 @@ def build_markdown(items: Iterable[dict]) -> str:
             if len(authors) > 5:
                 authors_text += " 等"
         abstract = (
-            item.get("abstract_translation")
+            item.get("summary_zh")
+            or item.get("abstract_translation")
             or item.get("translated")
             or item.get("paper_abstract")
             or ""
         )
         block = f"**{item['conference']} {item['year']}**\n{linked_title}"
+        if item.get("title_zh"):
+            block += f"\n原题：{item['paper_name']}"
         if authors_text:
             block += f"\n作者：{authors_text}"
         if abstract:
@@ -128,6 +130,22 @@ def main() -> int:
     selected = select_papers(candidates, args.date, args.limit)
     if not selected:
         raise RuntimeError("no conference papers matched the configured filters")
+
+    if not args.dry_run:
+        model_items = []
+        for index, paper in enumerate(selected):
+            abstract = (
+                paper.get("abstract_translation")
+                or paper.get("translated")
+                or paper.get("paper_abstract")
+                or ""
+            )
+            model_items.append(
+                {"id": str(index), "title": paper["paper_name"], "summary": abstract}
+            )
+        translations = enrich_chinese(model_items)
+        for index, paper in enumerate(selected):
+            paper.update(translations[str(index)])
 
     send_card(
         f"🏆 顶会论文日推 · {args.date.isoformat()}",
