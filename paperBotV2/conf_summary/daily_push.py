@@ -13,8 +13,8 @@ from typing import Iterable
 
 from paperBotV2.conf_summary.conf_daily import DEFAULT_CONFS, match_score
 from paperBotV2.feishu import send_card
-from paperBotV2.github_models import enrich_chinese
 from paperBotV2.metrics import fetch_s2_metrics, search_s2_conference_papers
+from paperBotV2.relevance import is_recommendation_relevant
 
 
 DEFAULT_DATA = Path(__file__).resolve().parent / "data" / "results.json"
@@ -61,7 +61,9 @@ def conference_candidates(
             if not isinstance(paper, dict) or not paper.get("paper_name"):
                 continue
             score = match_score(paper)
-            if score <= 0:
+            if score <= 0 or not is_recommendation_relevant(
+                paper.get("paper_name", ""), paper.get("paper_abstract", "")
+            ):
                 continue
             enriched = dict(paper)
             enriched.update({"conference": conference.upper(), "year": year, "match_score": score})
@@ -102,7 +104,14 @@ def online_conference_candidates(papers: Iterable[dict]) -> list[dict]:
             ),
         }
         normalized["match_score"] = match_score(normalized)
-        if normalized["paper_name"] and normalized["year"] and normalized["match_score"] > 0:
+        if (
+            normalized["paper_name"]
+            and normalized["year"]
+            and normalized["match_score"] > 0
+            and is_recommendation_relevant(
+                normalized["paper_name"], normalized["paper_abstract"]
+            )
+        ):
             candidates.append(normalized)
     return candidates
 
@@ -164,7 +173,7 @@ def _shorten(text: str, limit: int = 420) -> str:
 def build_markdown(items: Iterable[dict]) -> str:
     blocks = []
     for item in items:
-        title = item.get("title_zh") or item["paper_name"]
+        title = item["paper_name"]
         url = item.get("paper_url") or item.get("url") or ""
         linked_title = f"[{title}]({url})" if url else title
         authors = item.get("paper_authors") or []
@@ -173,28 +182,20 @@ def build_markdown(items: Iterable[dict]) -> str:
         else:
             authors_text = ", ".join(str(author) for author in authors[:5])
             if len(authors) > 5:
-                authors_text += " 等"
-        abstract = (
-            item.get("summary_zh")
-            or item.get("abstract_translation")
-            or item.get("translated")
-            or item.get("paper_abstract")
-            or ""
-        )
+                authors_text += " et al."
+        abstract = item.get("paper_abstract") or ""
         block = f"**{item['conference']} {item['year']}**\n{linked_title}"
         if item.get("selection_window"):
-            block += f"\n范围：{item['selection_window']}"
-        if item.get("title_zh"):
-            block += f"\n原题：{item['paper_name']}"
+            block += f"\nWindow: {item['selection_window']}"
         if authors_text:
-            block += f"\n作者：{authors_text}"
+            block += f"\nAuthors: {authors_text}"
         block += (
-            f"\n发布日期：{item.get('publication_date', '')} · "
-            f"引用 {int(item.get('citation_count', 0))} · "
-            f"高影响引用 {int(item.get('influential_citation_count', 0))}"
+            f"\nPublished: {item.get('publication_date', '')} · "
+            f"{int(item.get('citation_count', 0))} citations · "
+            f"{int(item.get('influential_citation_count', 0))} influential citations"
         )
         if abstract:
-            block += f"\n摘要：{_shorten(str(abstract))}"
+            block += f"\nAbstract: {_shorten(str(abstract))}"
         blocks.append(block)
     return "\n\n---\n\n".join(blocks)
 
@@ -262,7 +263,7 @@ def main() -> int:
 
     selected = select_papers(eligible, args.date, args.limit, args.lookback_days)
     for paper in selected:
-        paper["selection_window"] = f"近 {args.lookback_days} 天"
+        paper["selection_window"] = f"last {args.lookback_days} days"
     selected_ids = {
         str(paper.get("paper_url") or paper.get("paper_name")) for paper in selected
     }
@@ -273,37 +274,21 @@ def main() -> int:
         selected_ids,
     )
     for paper in fallback:
-        paper["selection_window"] = f"{args.date.year} 年质量补位"
+        paper["selection_window"] = f"{args.date.year} quality fallback"
     selected.extend(fallback)
     if not selected:
         send_card(
-            f"🏆 顶会论文日推 · {args.date.isoformat()}",
-            f"近 {args.lookback_days} 天及 {args.date.year} 年均暂无指定顶会论文；"
-            "未使用往年论文补位。",
+            f"🏆 Top-Conference Recommender Papers · {args.date.isoformat()}",
+            f"No relevant paper was found in the last {args.lookback_days} days "
+            f"or the {args.date.year} conference editions; no prior-year fallback was used.",
             color="purple",
             dry_run=args.dry_run,
         )
         print("Selected 0 conference papers (no prior-year backfill)")
         return 0
 
-    if not args.dry_run:
-        model_items = []
-        for index, paper in enumerate(selected):
-            abstract = (
-                paper.get("abstract_translation")
-                or paper.get("translated")
-                or paper.get("paper_abstract")
-                or ""
-            )
-            model_items.append(
-                {"id": str(index), "title": paper["paper_name"], "summary": abstract}
-            )
-        translations = enrich_chinese(model_items)
-        for index, paper in enumerate(selected):
-            paper.update(translations[str(index)])
-
     send_card(
-        f"🏆 顶会论文日推 · {args.date.isoformat()}",
+        f"🏆 Top-Conference Recommender Papers · {args.date.isoformat()}",
         build_markdown(selected),
         color="purple",
         dry_run=args.dry_run,
