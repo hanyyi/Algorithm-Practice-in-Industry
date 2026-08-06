@@ -8,15 +8,15 @@
 | 顶会论文 | 每天美西时间 08:00（自动适配 PST/PDT） | `daily_feishu_digest` | 3 篇 |
 | arXiv 每日论文 | 每天美西时间 08:00（自动适配 PST/PDT） | `daily_feishu_digest` | 10 篇 |
 
-行业实践文章会实时读取 Netflix、Spotify、GitHub、Pinterest、Airbnb 等工程博客 RSS；arXiv 读取 cs.IR、cs.CL、cs.LG；顶会范围为 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR。行业和 arXiv 把最近 7 天作为硬门槛；顶会优先近 7 天，不足时只用当年论文按质量补位，绝不回退到往年。标题和原始摘要会通过公开翻译服务转换为中文，不需要额外的模型 Secret。
+行业实践文章会实时读取 Netflix、Spotify、GitHub、Pinterest、Airbnb 等工程博客 RSS；arXiv 读取 cs.IR、cs.CL、cs.LG；顶会范围为 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR。三类内容都先通过推荐系统/搜索排序/广告排序的强相关硬过滤，通用 LLM、Agent、RAG、代码工程和设备分析不会仅凭热度入选。行业和 arXiv 把最近 7 天作为硬门槛；顶会优先近 7 天，不足时只用当年论文按质量补位，绝不回退到往年。每日推送保留来源提供的英文标题与英文摘要，不再自动翻译。
 
 ## 数量与选取规则
 
 `10 + 5 + 3` 只是为了让单次飞书卡片适合通勤阅读而设置的默认数量，并不是质量阈值，也不是仓库限制，可以通过 `ARXIV_LIMIT`、`INDUSTRY_LIMIT` 和 `CONF_LIMIT` 修改。
 
-- 行业文章：硬过滤最近 7 天，然后按 Hacker News points、评论数、主题相关度、发布时间依次排序。没有进入 Hacker News 的文章指标为 0，再由相关度和时间决定顺序。
+- 行业文章：先通过推荐系统强相关门槛，再硬过滤最近 7 天，然后按 Hacker News points、评论数、主题相关度、发布时间依次排序。没有进入 Hacker News 的文章指标为 0，再由相关度和时间决定顺序。
 - 顶会论文：通过 Semantic Scholar 核实精确发布日期，优先最近 7 天并按引用量、高影响引用量、搜广推主题相关度和发布时间排序；不足默认 3 篇时，用同一套质量规则从当年论文补足。只允许当年补位，不使用往年论文。
-- arXiv：硬过滤最近 7 天，通过 Semantic Scholar 获取引用量和高影响引用量，并结合 Hacker News points/评论数排序；指标相同才比较主题相关度和发布时间。默认 10 篇是飞书卡片的阅读上限。
+- arXiv：先淘汰没有推荐/个性化/用户物品/CTR-CVR/候选生成/Feed、搜索或广告排序强信号的论文，再硬过滤最近 7 天；通过 Semantic Scholar 获取引用量和高影响引用量，并结合 Hacker News points/评论数排序。默认 10 篇是飞书卡片的阅读上限，不足时不会用无关论文凑数。
 
 arXiv 没有公开、稳定的逐篇下载量 API，因此当前不会伪造“下载量”；论文使用 Semantic Scholar 引用指标，行业文章使用 Hacker News 公开互动指标。刚发布的论文引用量通常都是 0，此时会继续使用公开讨论热度、相关度和发布时间作为次级信号。
 
@@ -82,4 +82,4 @@ python -m unittest discover -s tests -v
 
 ## 注意
 
-中文摘要基于文章或论文提供的原始摘要翻译并截取重点句，不等同于阅读全文后的深度评审。公开 RSS、arXiv API 或翻译服务暂时不可用时，工作流会失败并保留错误日志，不会静默发送过期的英文替代内容。
+每日卡片直接显示来源的英文标题与英文摘要，不调用自动翻译。公开 RSS、arXiv API 或指标服务暂时不可用时，工作流会失败并保留错误日志，不会静默发送过期或无关内容。
