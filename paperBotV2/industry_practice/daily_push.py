@@ -8,7 +8,7 @@ import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -17,12 +17,12 @@ from bs4 import BeautifulSoup
 
 from paperBotV2.feishu import send_card
 from paperBotV2.github_models import enrich_chinese
+from paperBotV2.metrics import attach_hn_metrics, fetch_hn_metrics
 
 
 DEFAULT_DATA = Path(__file__).resolve().parent / "data" / "article.json"
 DEFAULT_FEEDS = {
     "Netflix TechBlog": "https://netflixtechblog.com/feed",
-    "Uber Engineering": "https://eng.uber.com/feed/",
     "Spotify Engineering": "https://engineering.atspotify.com/feed/",
     "GitHub Engineering": "https://github.blog/engineering/feed/",
     "Pinterest Engineering": "https://medium.com/feed/pinterest-engineering",
@@ -140,13 +140,24 @@ def industry_relevance(item: dict) -> int:
 
 
 def select_articles(
-    articles: Iterable[dict], push_date: date, limit: int, tags: set[str] | None = None
+    articles: Iterable[dict],
+    push_date: date,
+    limit: int,
+    tags: set[str] | None = None,
+    lookback_days: int = 7,
 ) -> list[dict]:
     filtered = []
     seen_links = set()
+    cutoff = push_date - timedelta(days=max(1, lookback_days) - 1)
     for item in articles:
         item_tags = {str(tag).strip() for tag in item.get("tags", [])}
         if tags and not (item_tags & tags):
+            continue
+        try:
+            published = date.fromisoformat(str(item.get("date", ""))[:10])
+        except ValueError:
+            continue
+        if published < cutoff or published > push_date:
             continue
         if item.get("title") and item.get("link") and item["link"] not in seen_links:
             filtered.append(item)
@@ -155,11 +166,13 @@ def select_articles(
     if not filtered or limit <= 0:
         return []
 
-    # Newest first. Relevance and a stable key only break ties on the same day.
+    # Real engagement first inside the strict weekly window.
     filtered.sort(
         key=lambda item: (
-            str(item.get("date", "")),
+            int(item.get("hn_points", 0)),
+            int(item.get("hn_comments", 0)),
             industry_relevance(item),
+            str(item.get("date", "")),
             _stable_key(item),
         ),
         reverse=True,
@@ -180,6 +193,10 @@ def build_markdown(items: Iterable[dict]) -> str:
         block = f"**{meta}**\n[{title}]({item['link']})"
         if item.get("title_zh") and item["title"] != item["title_zh"]:
             block += f"\n原题：{item['title']}"
+        block += (
+            f"\n指标：HN {int(item.get('hn_points', 0))} 分/"
+            f"{int(item.get('hn_comments', 0))} 评论"
+        )
         summary = item.get("summary_zh") or item.get("summary")
         if summary:
             block += f"\n摘要：{summary}"
@@ -192,6 +209,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--limit", type=int, default=int(os.environ.get("INDUSTRY_LIMIT", "5")))
     parser.add_argument("--date", type=date.fromisoformat, default=date.today())
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=int(
+            os.environ.get(
+                "INDUSTRY_LOOKBACK_DAYS", os.environ.get("LOOKBACK_DAYS", "7")
+            )
+        ),
+    )
     parser.add_argument("--tags", default=os.environ.get("INDUSTRY_TAGS", ""))
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -203,9 +229,33 @@ def main() -> int:
     live_articles = fetch_live_articles()
     if not live_articles:
         raise RuntimeError("no live engineering-blog feeds were available; refusing stale fallback")
-    selected = select_articles(live_articles, args.date, args.limit, wanted_tags)
-    if not selected:
-        raise RuntimeError("no industry-practice articles matched the configured filters")
+    recent = select_articles(
+        live_articles,
+        args.date,
+        len(live_articles),
+        wanted_tags,
+        args.lookback_days,
+    )
+    if not recent:
+        send_card(
+            f"🏭 行业实践日推 · {args.date.isoformat()}",
+            f"近 {args.lookback_days} 天暂无符合条件的新文章；未使用历史内容补位。",
+            color="turquoise",
+            dry_run=args.dry_run,
+        )
+        print("Selected 0 industry-practice articles (no stale backfill)")
+        return 0
+
+    cutoff_datetime = datetime.combine(
+        args.date - timedelta(days=max(1, args.lookback_days) - 1),
+        time.min,
+        tzinfo=timezone.utc,
+    )
+    hn_metrics = fetch_hn_metrics(cutoff_datetime)
+    attach_hn_metrics(recent, hn_metrics, "link")
+    selected = select_articles(
+        recent, args.date, args.limit, wanted_tags, args.lookback_days
+    )
 
     if not args.dry_run:
         translations = enrich_chinese(
