@@ -14,12 +14,21 @@ from typing import Iterable
 from paperBotV2.conf_summary.conf_daily import DEFAULT_CONFS, match_score
 from paperBotV2.feishu import send_card
 from paperBotV2.github_models import enrich_chinese
-from paperBotV2.metrics import fetch_s2_metrics
+from paperBotV2.metrics import fetch_s2_metrics, search_s2_conference_papers
 
 
 DEFAULT_DATA = Path(__file__).resolve().parent / "data" / "results.json"
 ROTATION_EPOCH = date(2026, 1, 1)
 KEY_PATTERN = re.compile(r"^([a-zA-Z]+)(\d{4})$")
+VENUE_FILTERS = {
+    "kdd": ("KDD",),
+    "www": ("WWW", "The Web Conference"),
+    "cikm": ("CIKM",),
+    "recsys": ("RecSys",),
+    "wsdm": ("WSDM",),
+    "sigir": ("SIGIR",),
+    "ecir": ("ECIR",),
+}
 
 
 def load_results(path: Path) -> dict:
@@ -60,6 +69,44 @@ def conference_candidates(
     return candidates
 
 
+def _conference_code(venue: str) -> str:
+    lowered = str(venue or "").lower()
+    if "web conference" in lowered or re.search(r"\bwww\b", lowered):
+        return "WWW"
+    for code in ("recsys", "sigir", "cikm", "wsdm", "ecir", "kdd"):
+        if code in lowered:
+            return code.upper()
+    return str(venue or "TOP CONF").upper()
+
+
+def online_conference_candidates(papers: Iterable[dict]) -> list[dict]:
+    candidates = []
+    for paper in papers:
+        external_ids = paper.get("externalIds") or {}
+        doi = str(external_ids.get("DOI") or "")
+        normalized = {
+            "paper_name": str(paper.get("title") or ""),
+            "paper_url": f"https://doi.org/{doi}" if doi else str(paper.get("url") or ""),
+            "paper_authors": [
+                str(author.get("name") or "")
+                for author in paper.get("authors", [])
+                if isinstance(author, dict) and author.get("name")
+            ],
+            "paper_abstract": str(paper.get("abstract") or ""),
+            "conference": _conference_code(str(paper.get("venue") or "")),
+            "year": int(paper.get("year") or 0),
+            "publication_date": str(paper.get("publicationDate") or ""),
+            "citation_count": int(paper.get("citationCount") or 0),
+            "influential_citation_count": int(
+                paper.get("influentialCitationCount") or 0
+            ),
+        }
+        normalized["match_score"] = match_score(normalized)
+        if normalized["paper_name"] and normalized["year"] and normalized["match_score"] > 0:
+            candidates.append(normalized)
+    return candidates
+
+
 def _stable_key(item: dict) -> tuple:
     identity = f"{item.get('conference')}\n{item.get('year')}\n{item.get('paper_name')}"
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
@@ -96,6 +143,19 @@ def select_papers(
     return ordered[:limit]
 
 
+def select_yearly_papers(
+    candidates: Iterable[dict], year: int, limit: int, excluded: set[str] | None = None
+) -> list[dict]:
+    excluded = excluded or set()
+    current_year = [
+        item
+        for item in candidates
+        if int(item.get("year", 0)) == year
+        and str(item.get("paper_url") or item.get("paper_name")) not in excluded
+    ]
+    return sorted(current_year, key=_stable_key)[: max(0, limit)]
+
+
 def _shorten(text: str, limit: int = 420) -> str:
     normalized = " ".join(text.split())
     return normalized if len(normalized) <= limit else normalized[: limit - 1] + "…"
@@ -122,6 +182,8 @@ def build_markdown(items: Iterable[dict]) -> str:
             or ""
         )
         block = f"**{item['conference']} {item['year']}**\n{linked_title}"
+        if item.get("selection_window"):
+            block += f"\n范围：{item['selection_window']}"
         if item.get("title_zh"):
             block += f"\n原题：{item['paper_name']}"
         if authors_text:
@@ -163,6 +225,18 @@ def main() -> int:
     args = parse_args()
     conferences = {item.strip().lower() for item in args.confs.split(",") if item.strip()}
     candidates = conference_candidates(load_results(args.data), conferences, args.start_year)
+    venue_filters = [
+        venue
+        for conference in conferences
+        for venue in VENUE_FILTERS.get(conference, (conference.upper(),))
+    ]
+    online = online_conference_candidates(
+        search_s2_conference_papers(
+            year=args.date.year,
+            venues=venue_filters,
+            limit=max(100, args.limit * 20),
+        )
+    )
     cutoff = args.date - timedelta(days=max(1, args.lookback_days) - 1)
     possible_recent = [
         paper for paper in candidates if cutoff.year <= int(paper["year"]) <= args.date.year
@@ -179,17 +253,37 @@ def main() -> int:
             identifier = identifiers.get(id(paper), "")
             paper.update(s2_metrics.get(identifier, {}))
 
-    selected = select_papers(
-        possible_recent, args.date, args.limit, args.lookback_days
+    combined = {}
+    for paper in possible_recent + online:
+        identity = str(paper.get("paper_url") or paper.get("paper_name", "")).lower()
+        if identity:
+            combined[identity] = paper
+    eligible = list(combined.values())
+
+    selected = select_papers(eligible, args.date, args.limit, args.lookback_days)
+    for paper in selected:
+        paper["selection_window"] = f"近 {args.lookback_days} 天"
+    selected_ids = {
+        str(paper.get("paper_url") or paper.get("paper_name")) for paper in selected
+    }
+    fallback = select_yearly_papers(
+        eligible,
+        args.date.year,
+        args.limit - len(selected),
+        selected_ids,
     )
+    for paper in fallback:
+        paper["selection_window"] = f"{args.date.year} 年质量补位"
+    selected.extend(fallback)
     if not selected:
         send_card(
             f"🏆 顶会论文日推 · {args.date.isoformat()}",
-            f"近 {args.lookback_days} 天暂无指定顶会新论文；未使用历史论文补位。",
+            f"近 {args.lookback_days} 天及 {args.date.year} 年均暂无指定顶会论文；"
+            "未使用往年论文补位。",
             color="purple",
             dry_run=args.dry_run,
         )
-        print("Selected 0 conference papers (no stale backfill)")
+        print("Selected 0 conference papers (no prior-year backfill)")
         return 0
 
     if not args.dry_run:

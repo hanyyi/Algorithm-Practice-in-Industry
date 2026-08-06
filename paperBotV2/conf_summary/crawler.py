@@ -8,6 +8,7 @@ import asyncio
 import aiohttp
 import random
 import time
+from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 
 HEADERS = {
@@ -25,7 +26,7 @@ def get_soup(conf):
     return conf, BeautifulSoup(r.text, "html.parser")
 
 
-def get_links(results, confs, filter_keywords=[], start_year=2012):
+def get_links(results, confs, filter_keywords=[], start_year=2012, refresh_existing=False):
     rsp_soup = []
     links_all = []
 
@@ -45,7 +46,10 @@ def get_links(results, confs, filter_keywords=[], start_year=2012):
             and int(re.search(r'\d{4}', item['href']).group()) >= start_year
             and (f'{conf}/{conf}' in item['href'] or 'nips/neurips' in item['href'])
             and all(keyword not in item['href'] for keyword in filter_keywords)
-            and conf + re.search(r'\d{4}', item['href']).group() not in existing_confs
+            and (
+                refresh_existing
+                or conf + re.search(r'\d{4}', item['href']).group() not in existing_confs
+            )
         ]
         links_all.extend(links)
 
@@ -75,6 +79,15 @@ async def search_paper_info(session, paper_item):
             paper_title = paper_title[:-1]
         if any(keyword in paper_title for keyword in filter_keywords):
             return None
+        published_node = paper_item.find(itemprop="datePublished")
+        publication_date = ""
+        if published_node is not None:
+            publication_date = str(
+                published_node.get("datetime")
+                or published_node.get("content")
+                or published_node.get_text(strip=True)
+                or ""
+            )
         return {
             "paper_name": paper_title,
             "paper_url": paper_url,
@@ -84,14 +97,22 @@ async def search_paper_info(session, paper_item):
             "abstract_translation": "",
             "title_translation": "",
             "relevance_score": 0,
-            "reasoning": ""
+            "reasoning": "",
+            "publication_date": publication_date,
+            "publication_year": int(publication_date[:4]) if publication_date[:4].isdigit() else None,
+            "first_seen_at": datetime.now(timezone.utc).isoformat(),
+            "doi": paper_url.split("doi.org/", 1)[1] if "doi.org/" in paper_url else "",
+            "source": "DBLP"
         }
     except Exception as e:
         print(f"Error occurred while searching paper info: {e}")
         return None
 
 
-async def search_from_dblp(session, url, name, results, sem, max_retries=3, initial_delay=2):
+async def search_from_dblp(
+    session, url, name, results, sem, max_retries=3, initial_delay=2,
+    refresh_existing=False
+):
     """
     从dblp页面爬取多篇论文信息，支持失败重试
     
@@ -107,7 +128,7 @@ async def search_from_dblp(session, url, name, results, sem, max_retries=3, init
     Returns:
         更新后的results字典
     """
-    if name in results:
+    if name in results and not refresh_existing:
         print(f"Skipping {name} as it already exists in results")
         return results
     
@@ -127,13 +148,23 @@ async def search_from_dblp(session, url, name, results, sem, max_retries=3, init
 
                         if name not in results:
                             results[name] = []
+                        existing = {
+                            str(item.get("paper_url") or item.get("paper_name"))
+                            for item in results[name]
+                            if isinstance(item, dict)
+                        }
 
                         # 直接处理论文项，不使用额外的异步任务
                         paper_count = 0
                         for paper_item in dblp_soup.find_all("li", class_="entry"):
                             paper_info = await search_paper_info(session, paper_item)
-                            if paper_info is not None:
+                            identity = (
+                                str(paper_info.get("paper_url") or paper_info.get("paper_name"))
+                                if paper_info is not None else ""
+                            )
+                            if paper_info is not None and identity not in existing:
                                 results[name].append(paper_info)
+                                existing.add(identity)
                                 paper_count += 1
 
                         print(f"Successfully crawled {paper_count} papers for {name}")
@@ -158,7 +189,10 @@ async def search_from_dblp(session, url, name, results, sem, max_retries=3, init
     return results
 
 
-async def crawl(urls, names, results, threads, max_retries=3, initial_delay=2):
+async def crawl(
+    urls, names, results, threads, max_retries=3, initial_delay=2,
+    refresh_existing=False
+):
     """
     异步并发爬取多个会议页面，添加失败重试和延迟策略
     
@@ -180,13 +214,25 @@ async def crawl(urls, names, results, threads, max_retries=3, initial_delay=2):
         sem = asyncio.Semaphore(threads)  # 限制并发请求数
         
         # 使用更高效的方式创建和执行任务
-        async def create_task_with_delay(url, name):
+        async def create_task_with_delay(group_urls, name):
             # 添加随机延迟
             await asyncio.sleep(random.uniform(0, 0.3))
-            return await search_from_dblp(session, url, name, results, sem, max_retries, initial_delay)
+            for index, url in enumerate(group_urls):
+                await search_from_dblp(
+                    session, url, name, results, sem, max_retries, initial_delay,
+                    refresh_existing or index > 0
+                )
+            return results
         
-        # 并行执行所有任务
-        tasks = [create_task_with_delay(url, name) for url, name in zip(urls, names)]
+        # Different parts of the same proceedings share one key. Process those
+        # pages sequentially so all volumes are merged without races.
+        grouped_urls = {}
+        for url, name in zip(urls, names):
+            grouped_urls.setdefault(name, []).append(url)
+        tasks = [
+            create_task_with_delay(group_urls, name)
+            for name, group_urls in grouped_urls.items()
+        ]
         
         # 使用tqdm显示进度
         print(f"Created {len(tasks)} tasks. Starting execution...")
@@ -225,7 +271,8 @@ def run_all(
     writename='data/results.json',
     threads=20,  # 增加并发数，提高爬取速度
     max_retries=2,  # 减少重试次数
-    initial_delay=1  # 减少初始延迟时间
+    initial_delay=1,  # 减少初始延迟时间
+    refresh_existing=False
 ):
     """
     协调整个爬取流程，添加失败重试和延迟策略
@@ -257,7 +304,10 @@ def run_all(
     print(f"Using User-Agent: {HEADERS['User-Agent']}")
     
     # 获取会议链接
-    links = get_links(results, confs, filter_keywords, start_year)
+    links = get_links(
+        results, confs, filter_keywords, start_year,
+        refresh_existing=refresh_existing
+    )
     
     if len(links) > 0:
         names, urls = zip(*links)
@@ -277,7 +327,10 @@ def run_all(
                 print(f'\nProcessing batch {i//batch_size + 1}/{total_batches}: {len(batch_urls)} papers')
                 
                 # 爬取当前批次
-                results = asyncio.run(crawl(batch_urls, batch_names, results, threads, max_retries, initial_delay))
+                results = asyncio.run(crawl(
+                    batch_urls, batch_names, results, threads, max_retries,
+                    initial_delay, refresh_existing
+                ))
                 
                 # 更新整体进度条
                 pbar.update(len(batch_urls))
