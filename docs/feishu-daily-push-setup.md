@@ -8,17 +8,17 @@
 | 顶会论文 | 每天美西时间 08:00（自动适配 PST/PDT） | `daily_feishu_digest` | 3 篇 |
 | arXiv 每日论文 | 每天美西时间 08:00（自动适配 PST/PDT） | `daily_feishu_digest` | 10 篇 |
 
-行业实践文章会实时读取 Netflix、Uber、Spotify、GitHub、Pinterest、Airbnb 等工程博客 RSS，并按发布日期取最新内容。顶会论文从 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR 论文中优先选择最新年份和搜广推相关内容。arXiv 从 cs.IR、cs.CL、cs.LG 最近 7 天的新论文中按搜广推关键词相关性和发布时间排序。标题和原始摘要会通过公开翻译服务转换为中文，不需要额外的模型 Secret。
+行业实践文章会实时读取 Netflix、Spotify、GitHub、Pinterest、Airbnb 等工程博客 RSS；arXiv 读取 cs.IR、cs.CL、cs.LG；顶会范围为 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR。三类内容都把最近 7 天作为硬门槛，旧内容不会补位。标题和原始摘要会通过公开翻译服务转换为中文，不需要额外的模型 Secret。
 
 ## 数量与选取规则
 
 `10 + 5 + 3` 只是为了让单次飞书卡片适合通勤阅读而设置的默认数量，并不是质量阈值，也不是仓库限制，可以通过 `ARXIV_LIMIT`、`INDUSTRY_LIMIT` 和 `CONF_LIMIT` 修改。
 
-- 行业文章：只从公开工程博客 RSS 中选择发布日期最新的文章；日期相同时再比较搜广推、机器学习、LLM、推理和数据平台关键词。所有实时来源都不可用时直接失败，不再静默回退到旧文章。
-- 顶会论文：先限制会议和年份，再根据标题中的推荐、搜索、广告、排序、CTR、检索等关键词计算相关性；优先最新年份，其次是关键词相关性，不再按日期轮换到旧论文。它衡量的是“相关程度和新近程度”，不是引用量或获奖情况。
-- arXiv：先限定分类和最近 7 天，再按标题及摘要中的检索、推荐、排序、广告、CTR、个性化、LLM 等关键词加权；同分时优先发布时间更近的论文。默认 10 篇是飞书卡片的阅读上限，可通过 `ARXIV_LIMIT` 修改。
+- 行业文章：硬过滤最近 7 天，然后按 Hacker News points、评论数、主题相关度、发布时间依次排序。没有进入 Hacker News 的文章指标为 0，再由相关度和时间决定顺序。
+- 顶会论文：通过 Semantic Scholar 核实精确发布日期并硬过滤最近 7 天，然后按引用量、高影响引用量、搜广推主题相关度和发布时间排序。近 7 天没有指定顶会新论文时发送“暂无新增”，不会用 2025 等旧论文补位。
+- arXiv：硬过滤最近 7 天，通过 Semantic Scholar 获取引用量和高影响引用量，并结合 Hacker News points/评论数排序；指标相同才比较主题相关度和发布时间。默认 10 篇是飞书卡片的阅读上限。
 
-如果要做真正的质量精选，需要增加可靠信号，例如 Semantic Scholar 引用量、会议奖项、GitHub 热度或人工评分；当前仓库没有这些数据。
+arXiv 没有公开、稳定的逐篇下载量 API，因此当前不会伪造“下载量”；论文使用 Semantic Scholar 引用指标，行业文章使用 Hacker News 公开互动指标。刚发布的论文引用量通常都是 0，此时会继续使用公开讨论热度、相关度和发布时间作为次级信号。
 
 ## 一次性配置
 
@@ -50,7 +50,8 @@ Webhook 等同于群机器人的发送凭证，不要写入代码、Issue 或日
 - `INDUSTRY_FEEDS`：可选的工程博客 RSS JSON 映射；不设置时使用仓库默认来源。
 - `CONF_LIMIT`：每天顶会论文数量。
 - `ARXIV_LIMIT`：每天 arXiv 论文数量。
-- `ARXIV_LOOKBACK_DAYS`：arXiv 新论文回看天数，默认 7 天以覆盖周末和发布延迟。
+- `LOOKBACK_DAYS`：行业文章和顶会论文的硬回看窗口，部署固定为 7 天。
+- `ARXIV_LOOKBACK_DAYS`：arXiv 的硬回看窗口，部署固定为 7 天。
 - `ARXIV_CATEGORIES`：arXiv 分类，默认 `cs.IR,cs.CL,cs.LG`。
 - `CONF_START_YEAR`：顶会论文最早年份。
 - `CONFS`：会议缩写，英文逗号分隔。
