@@ -8,7 +8,7 @@
 | 顶会论文 | 每天美西时间 08:00（自动适配 PST/PDT） | `daily_feishu_digest` | 3 篇 |
 | arXiv 每日论文 | 每天美西时间 08:00（自动适配 PST/PDT） | `daily_feishu_digest` | 10 篇 |
 
-行业实践文章会实时读取 Netflix、Uber、Spotify、GitHub、Pinterest、Airbnb 等工程博客 RSS，并按发布日期取最新内容。顶会论文从 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR 论文中优先选择最新年份和搜广推相关内容。arXiv 从 cs.IR、cs.CL、cs.LG 最近 7 天的新论文中按搜广推关键词相关性和发布时间排序。GitHub Models 使用工作流自带的 `GITHUB_TOKEN` 生成中文标题和中文摘要，不需要额外付费模型 Secret。
+行业实践文章会实时读取 Netflix、Uber、Spotify、GitHub、Pinterest、Airbnb 等工程博客 RSS，并按发布日期取最新内容。顶会论文从 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR 论文中优先选择最新年份和搜广推相关内容。arXiv 从 cs.IR、cs.CL、cs.LG 最近 7 天的新论文中按搜广推关键词相关性和发布时间排序。标题和原始摘要会通过公开翻译服务转换为中文，不需要额外的模型 Secret。
 
 ## 数量与选取规则
 
@@ -77,4 +77,4 @@ python -m unittest discover -s tests -v
 
 ## 注意
 
-GitHub Models 的中文摘要基于文章或论文提供的标题与摘要生成，不等同于阅读全文后的深度评审。公开 RSS 或 arXiv API 暂时不可用时，工作流会失败并保留错误日志，不会静默发送过期的英文替代内容。
+中文摘要基于文章或论文提供的原始摘要翻译并截取重点句，不等同于阅读全文后的深度评审。公开 RSS、arXiv API 或翻译服务暂时不可用时，工作流会失败并保留错误日志，不会静默发送过期的英文替代内容。
