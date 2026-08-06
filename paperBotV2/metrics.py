@@ -22,6 +22,10 @@ TRACKING_PARAMS = {
 }
 
 
+class MetricBadRequest(RuntimeError):
+    """A provider rejected one or more identifiers in a batch."""
+
+
 def canonical_url(value: str) -> str:
     parts = urlsplit(str(value or "").strip())
     if not parts.netloc:
@@ -44,6 +48,15 @@ def _request(method: str, url: str, *, timeout: int, **kwargs):
     for attempt in range(3):
         try:
             response = requests.request(method, url, timeout=timeout, **kwargs)
+            if response.status_code == 400:
+                raise MetricBadRequest(
+                    f"HTTP 400: {response.text[:500]}"
+                )
+            if 400 <= response.status_code < 500 and response.status_code != 429:
+                raise RuntimeError(
+                    f"metric provider returned HTTP {response.status_code}: "
+                    f"{response.text[:500]}"
+                )
             if response.status_code == 429 or response.status_code >= 500:
                 raise requests.HTTPError(
                     f"HTTP {response.status_code}: {response.text[:300]}", response=response
@@ -109,16 +122,26 @@ def fetch_s2_metrics(identifiers: Iterable[str], timeout: int = 30) -> dict[str,
     ids = [str(identifier) for identifier in identifiers if identifier]
     result: dict[str, dict] = {}
     fields = "title,citationCount,influentialCitationCount,publicationDate,externalIds"
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
-        response = _request(
-            "POST",
-            S2_BATCH_URL,
-            timeout=timeout,
-            params={"fields": fields},
-            json={"ids": batch},
-            headers={"User-Agent": "Algorithm-Practice-in-Industry/1.0"},
-        )
+    def collect(batch: list[str]) -> None:
+        if not batch:
+            return
+        try:
+            response = _request(
+                "POST",
+                S2_BATCH_URL,
+                timeout=timeout,
+                params={"fields": fields},
+                json={"ids": batch},
+                headers={"User-Agent": "Algorithm-Practice-in-Industry/1.0"},
+            )
+        except MetricBadRequest as exc:
+            if len(batch) == 1:
+                print(f"Warning: skipped invalid Semantic Scholar id {batch[0]}: {exc}")
+                return
+            midpoint = len(batch) // 2
+            collect(batch[:midpoint])
+            collect(batch[midpoint:])
+            return
         try:
             payload = response.json()
         except ValueError as exc:
@@ -135,4 +158,6 @@ def fetch_s2_metrics(identifiers: Iterable[str], timeout: int = 30) -> dict[str,
                 ),
                 "publication_date": str(paper.get("publicationDate") or ""),
             }
+    for start in range(0, len(ids), 500):
+        collect(ids[start : start + 500])
     return result
