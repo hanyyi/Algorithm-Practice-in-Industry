@@ -154,32 +154,22 @@ class FeishuClientTests(unittest.TestCase):
         self.assertNotIn("template_id", card)
 
 
-class GitHubModelsTests(unittest.TestCase):
-    @patch("paperBotV2.github_models.requests.post")
-    def test_parses_chinese_enrichment(self, post):
-        response = Mock(ok=True)
-        response.json.return_value = {
-            "choices": [{
-                "message": {
-                    "content": json.dumps({
-                        "items": [{
-                            "id": "paper-1",
-                            "title_zh": "中文论文标题",
-                            "summary_zh": "中文论文摘要。",
-                        }]
-                    }, ensure_ascii=False)
-                }
-            }]
-        }
-        post.return_value = response
+class ChineseEnrichmentTests(unittest.TestCase):
+    @patch("paperBotV2.github_models.requests.get")
+    def test_translates_title_and_summary_to_chinese(self, get):
+        title_response = Mock()
+        title_response.json.return_value = [[['中文论文标题', 'English title']]]
+        summary_response = Mock()
+        summary_response.json.return_value = [[['中文论文摘要。', 'English abstract']]]
+        get.side_effect = [title_response, summary_response]
 
         result = enrich_chinese(
-            [{"id": "paper-1", "title": "English title", "summary": "English abstract"}],
-            token="test-token",
+            [{"id": "paper-1", "title": "English title", "summary": "English abstract"}]
         )
 
         self.assertEqual(result["paper-1"]["title_zh"], "中文论文标题")
-        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer test-token")
+        self.assertEqual(result["paper-1"]["summary_zh"], "中文论文摘要。")
+        self.assertEqual(get.call_count, 2)
 
 
 if __name__ == "__main__":
