@@ -14,12 +14,19 @@ from paperBotV2.conf_summary.daily_push import (
     build_markdown as build_conf_markdown,
     conference_candidates,
     load_results,
+    online_conference_candidates,
     select_papers,
+    select_yearly_papers,
 )
 from paperBotV2.feishu import send_card
 from paperBotV2.github_models import enrich_chinese
 from paperBotV2.industry_practice.daily_push import load_articles, select_articles
-from paperBotV2.metrics import canonical_url, fetch_hn_metrics, fetch_s2_metrics
+from paperBotV2.metrics import (
+    canonical_url,
+    fetch_hn_metrics,
+    fetch_s2_metrics,
+    search_s2_conference_papers,
+)
 
 
 class IndustryPushTests(unittest.TestCase):
@@ -107,6 +114,38 @@ class ConferencePushTests(unittest.TestCase):
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0]["conference"], "KDD")
         self.assertIn("KDD 2026", build_conf_markdown(selected))
+
+    def test_fills_from_current_year_only_by_quality(self):
+        papers = online_conference_candidates([
+            {
+                "title": "Recommendation Retrieval at Scale",
+                "year": 2026,
+                "venue": "KDD",
+                "url": "https://example.com/top",
+                "citationCount": 8,
+                "influentialCitationCount": 2,
+                "authors": [{"name": "A"}],
+            },
+            {
+                "title": "Search Ranking System",
+                "year": 2026,
+                "venue": "SIGIR",
+                "url": "https://example.com/second",
+                "citationCount": 2,
+            },
+            {
+                "title": "Old Recommendation System",
+                "year": 2025,
+                "venue": "RecSys",
+                "url": "https://example.com/old",
+                "citationCount": 100,
+            },
+        ])
+
+        selected = select_yearly_papers(papers, 2026, 2)
+
+        self.assertEqual([paper["year"] for paper in selected], [2026, 2026])
+        self.assertEqual(selected[0]["citation_count"], 8)
 
 
 class ArxivPushTests(unittest.TestCase):
@@ -208,6 +247,35 @@ class PublicMetricsTests(unittest.TestCase):
         self.assertEqual(
             metrics["ARXIV:2608.00001"]["influential_citation_count"], 2
         )
+
+    @patch("paperBotV2.metrics.requests.request")
+    def test_semantic_scholar_splits_a_rejected_batch(self, request):
+        rejected = Mock(status_code=400, text="invalid paper id")
+        first = Mock(status_code=200)
+        first.json.return_value = [{"citationCount": 1}]
+        second = Mock(status_code=200)
+        second.json.return_value = [{"citationCount": 2}]
+        request.side_effect = [rejected, first, second]
+
+        metrics = fetch_s2_metrics(["ARXIV:2608.00001", "ARXIV:2608.00002"])
+
+        self.assertEqual(metrics["ARXIV:2608.00001"]["citation_count"], 1)
+        self.assertEqual(metrics["ARXIV:2608.00002"]["citation_count"], 2)
+
+    @patch("paperBotV2.metrics.requests.request")
+    def test_searches_current_year_conference_metrics(self, request):
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "data": [{"paperId": "p1", "title": "Recommendation Retrieval"}]
+        }
+        request.return_value = response
+
+        papers = search_s2_conference_papers(year=2026, venues=["KDD", "SIGIR"])
+
+        self.assertEqual(papers[0]["paperId"], "p1")
+        params = request.call_args.kwargs["params"]
+        self.assertEqual(params["publicationDateOrYear"], "2026")
+        self.assertEqual(params["venue"], "KDD,SIGIR")
 
 
 class FeishuClientTests(unittest.TestCase):
