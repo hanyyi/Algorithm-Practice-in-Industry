@@ -1,7 +1,8 @@
 import os
 import json
-import requests
 from datetime import datetime
+
+from paperBotV2.feishu import send_card
 
 # 从环境变量获取配置，同时提供默认值
 # 支持多个飞书URL，使用逗号分隔
@@ -74,76 +75,26 @@ def send_papers_to_feishu(papers, feishu_urls=None):
         return
     
     date = datetime.now().strftime('%Y-%m-%d')
-    
-    card_data = {
-        "type": "template",
-        "data": {
-            "template_id": "AAqxH62u1uNko",
-            "template_version_name": "1.0.8",
-            "template_variable": {
-                "loop": [],
-                "date": date
-            }
-        }
-    }
-
+    blocks = []
     for paper in papers:
         title = paper['title']
-        translation = paper.get('translation', 'N/A')
-        score = paper.get('rerank_relevance_score', 'N/A')
-        summary = paper.get('summary', 'N/A')
-        url = paper['url']
-        
-        paper = f"[{title}]({url})"
-        score = "⭐️" * score + f" <text_tag color='blue'>{score}分</text_tag>" if isinstance(score, int) else "N/A"
-        
-        card_data['data']['template_variable']['loop'].append({
-            "paper": paper,
-            "translation": translation,
-            "score": score,
-            "summary": summary
-        })
-        
-    card = json.dumps(card_data)
-    body = json.dumps({"msg_type": "interactive", "card": card})
-    headers = {"Content-Type": "application/json"}
-    failures = []
-    
-    # 向每个飞书URL发送消息
-    for idx, url in enumerate(feishu_urls):
-        send_label = f"[{idx+1}/{len(feishu_urls)}]"
-        try:
-            ret = requests.post(url=url, data=body, headers=headers, timeout=10)
-            print(f"✉️ 飞书推送{send_label}返回状态: {ret.status_code}")
-            response_body = ret.text[:500]
-            if not ret.ok:
-                failures.append(f"{send_label} HTTP失败: {ret.status_code}; body={response_body}")
-                continue
+        translation = paper.get('translation') or '暂无中文标题'
+        score = paper.get('rerank_relevance_score')
+        summary = " ".join(str(paper.get('summary') or '').split())
+        if len(summary) > 420:
+            summary = summary[:419] + '…'
+        score_text = f" · {'⭐' * score} {score}分" if isinstance(score, int) else ""
+        block = f"[{title}]({paper['url']}){score_text}\n{translation}"
+        if summary:
+            block += f"\n{summary}"
+        blocks.append(block)
 
-            try:
-                ret_data = ret.json()
-            except ValueError as e:
-                failures.append(
-                    f"{send_label} 响应不是有效JSON: {e}; "
-                    f"HTTP {ret.status_code}; body={response_body}"
-                )
-                continue
-
-            status_code = ret_data.get("StatusCode", ret_data.get("code"))
-            if status_code != 0:
-                status_msg = ret_data.get("StatusMessage", ret_data.get("msg", ""))
-                failures.append(
-                    f"{send_label} 业务失败: code={status_code}, "
-                    f"msg={status_msg}; body={response_body}"
-                )
-                continue
-        except requests.RequestException as e:
-            failures.append(f"{send_label} 请求失败: {e}")
-
-    if failures:
-        for failure in failures:
-            print(f"❌ 飞书推送失败: {failure}")
-        raise RuntimeError("飞书推送存在失败:\n" + "\n".join(failures))
+    send_card(
+        f"📚 arXiv 论文日推 · {date}",
+        "\n\n---\n\n".join(blocks),
+        feishu_urls,
+        color="blue",
+    )
 
 
 def main():
