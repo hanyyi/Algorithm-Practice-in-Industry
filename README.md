@@ -42,6 +42,10 @@
 - 顶会 README 更新：`python paperBotV2/conf_summary/update_readme_papers.py`
 - 行业实践更新：`python paperBotV2/industry_practice/maintain.py`
 
+## 飞书每日推送
+
+仓库支持每天向飞书推送行业实践文章、顶会论文和 arXiv 新论文。Fork 后只需配置 `FEISHU_URL` GitHub Actions Secret；完整步骤见 [飞书每日推送配置](docs/feishu-daily-push-setup.md)。原有 LLM 增强版 arXiv 流程保留为手动工作流，只有运行它时才需要 `DEEPSEEK_API_KEY`。
+
 旧版脚本和旧 arXiv workflow 已归档到 `legacy/`，仅用于历史回溯、兼容排查和必要时回滚；日常开发和自动化入口以 `paperBotV2/` 为准。
 
 ## 贡献新文章
