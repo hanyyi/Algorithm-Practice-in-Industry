@@ -12,6 +12,7 @@ import requests
 
 HN_SEARCH_URL = "https://hn.algolia.com/api/v1/search_by_date"
 S2_BATCH_URL = "https://api.semanticscholar.org/graph/v1/paper/batch"
+S2_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
 TRACKING_PARAMS = {
     "source",
     "utm_campaign",
@@ -161,3 +162,38 @@ def fetch_s2_metrics(identifiers: Iterable[str], timeout: int = 30) -> dict[str,
     for start in range(0, len(ids), 500):
         collect(ids[start : start + 500])
     return result
+
+
+def search_s2_conference_papers(
+    *, year: int, venues: Iterable[str], limit: int = 100, timeout: int = 30
+) -> list[dict]:
+    """Find current-year conference papers already indexed by Semantic Scholar."""
+    venue_filter = ",".join(dict.fromkeys(str(venue) for venue in venues if venue))
+    if not venue_filter:
+        return []
+    response = _request(
+        "GET",
+        S2_SEARCH_URL,
+        timeout=timeout,
+        params={
+            "query": (
+                "recommendation OR recommender OR retrieval OR search OR ranking "
+                "OR advertising OR personalization"
+            ),
+            "publicationDateOrYear": str(year),
+            "publicationTypes": "Conference",
+            "venue": venue_filter,
+            "fields": (
+                "title,abstract,year,venue,authors,url,externalIds,citationCount,"
+                "influentialCitationCount,publicationDate"
+            ),
+            "sort": "citationCount:desc",
+            "limit": min(max(1, limit), 1000),
+        },
+        headers={"User-Agent": "Algorithm-Practice-in-Industry/1.0"},
+    )
+    try:
+        payload = response.json()["data"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("Semantic Scholar returned an invalid search payload") from exc
+    return [paper for paper in payload if isinstance(paper, dict) and paper.get("title")]
