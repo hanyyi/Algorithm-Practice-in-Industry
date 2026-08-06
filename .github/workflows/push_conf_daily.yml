@@ -23,6 +23,7 @@ jobs:
       INDUSTRY_LIMIT: "5"
       CONF_LIMIT: "3"
       ARXIV_LIMIT: "10"
+      LOOKBACK_DAYS: "7"
       ARXIV_LOOKBACK_DAYS: "7"
       ARXIV_CATEGORIES: "cs.IR,cs.CL,cs.LG"
       CONF_START_YEAR: "2021"
