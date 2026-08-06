@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable
 
@@ -11,6 +12,7 @@ import requests
 
 from paperBotV2.feishu import send_card
 from paperBotV2.github_models import enrich_chinese
+from paperBotV2.metrics import attach_hn_metrics, fetch_hn_metrics, fetch_s2_metrics
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
@@ -32,6 +34,7 @@ KEYWORD_WEIGHTS = {
     "llm": 2,
     "agent": 1,
 }
+ARXIV_ID_PATTERN = re.compile(r"arxiv\.org/(?:abs|pdf)/([^/?#]+)", re.IGNORECASE)
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -63,6 +66,14 @@ def relevance_score(paper: dict) -> int:
     return score
 
 
+def semantic_scholar_id(paper: dict) -> str:
+    match = ARXIV_ID_PATTERN.search(f"{paper.get('url', '')} {paper.get('id', '')}")
+    if not match:
+        return ""
+    arxiv_id = re.sub(r"v\d+$", "", match.group(1), flags=re.IGNORECASE)
+    return f"ARXIV:{arxiv_id}"
+
+
 def select_papers(
     papers: Iterable[dict], now: datetime, limit: int, lookback_days: int
 ) -> list[dict]:
@@ -71,13 +82,18 @@ def select_papers(
     for paper in papers:
         if not paper.get("title") or not paper.get("url"):
             continue
-        if paper.get("published") and paper["published"] < cutoff:
+        published = paper.get("published")
+        if not published or published < cutoff or published > now:
             continue
         unique[paper.get("id") or paper["url"]] = paper
 
     ordered = sorted(
         unique.values(),
         key=lambda paper: (
+            -int(paper.get("citation_count", 0)),
+            -int(paper.get("influential_citation_count", 0)),
+            -int(paper.get("hn_points", 0)),
+            -int(paper.get("hn_comments", 0)),
             -relevance_score(paper),
             -paper.get("published", datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
             paper.get("id", ""),
@@ -129,6 +145,11 @@ def build_markdown(papers: Iterable[dict]) -> str:
             block += f"\n原题：{paper['title']}"
         if meta:
             block += f"\n{meta}"
+        block += (
+            f"\n指标：引用 {int(paper.get('citation_count', 0))} · "
+            f"高影响引用 {int(paper.get('influential_citation_count', 0))} · "
+            f"HN {int(paper.get('hn_points', 0))} 分/{int(paper.get('hn_comments', 0))} 评论"
+        )
         summary = paper.get("summary_zh") or paper.get("summary")
         if summary:
             block += f"\n摘要：{_shorten(summary)}"
@@ -157,11 +178,35 @@ def main() -> int:
     args = parse_args()
     categories = [item.strip() for item in args.categories.split(",") if item.strip()]
     now = datetime.now(timezone.utc)
-    selected = select_papers(
-        fetch_papers(categories, args.max_results), now, args.limit, args.lookback_days
+    recent = select_papers(
+        fetch_papers(categories, args.max_results),
+        now,
+        args.max_results,
+        args.lookback_days,
     )
-    if not selected:
+    if not recent:
         raise RuntimeError("no recent arXiv papers matched the configured categories")
+
+    metric_sources = 0
+    identifiers = {paper["id"]: semantic_scholar_id(paper) for paper in recent}
+    try:
+        s2_metrics = fetch_s2_metrics(identifier for identifier in identifiers.values() if identifier)
+        for paper in recent:
+            paper.update(s2_metrics.get(identifiers[paper["id"]], {}))
+        metric_sources += 1
+    except Exception as exc:
+        print(f"Warning: Semantic Scholar metrics unavailable: {exc}")
+
+    try:
+        hn_metrics = fetch_hn_metrics(now - timedelta(days=args.lookback_days))
+        attach_hn_metrics(recent, hn_metrics, "url")
+        metric_sources += 1
+    except Exception as exc:
+        print(f"Warning: Hacker News metrics unavailable: {exc}")
+
+    if metric_sources == 0:
+        raise RuntimeError("all arXiv metric providers were unavailable")
+    selected = select_papers(recent, now, args.limit, args.lookback_days)
 
     if not args.dry_run:
         translations = enrich_chinese(
