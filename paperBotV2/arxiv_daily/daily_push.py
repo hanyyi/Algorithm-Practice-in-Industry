@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable
 
@@ -91,27 +92,52 @@ def select_papers(
     return ordered[: max(0, limit)]
 
 
-def fetch_papers(categories: Iterable[str], max_results: int, timeout: int = 30) -> list[dict]:
+def _result_pages(max_results: int, page_size: int = 100) -> list[tuple[int, int]]:
+    if max_results <= 0 or page_size <= 0:
+        return []
+    return [
+        (start, min(page_size, max_results - start))
+        for start in range(0, max_results, page_size)
+    ]
+
+
+def fetch_papers(
+    categories: Iterable[str],
+    max_results: int,
+    timeout: int = 30,
+    pause_seconds: float = 3.0,
+) -> list[dict]:
     import feedparser
 
     query = " OR ".join(f"cat:{category}" for category in categories)
-    response = requests.get(
-        ARXIV_API_URL,
-        params={
-            "search_query": query,
-            "start": 0,
-            "max_results": max_results,
-            "sortBy": "submittedDate",
-            "sortOrder": "descending",
-        },
-        headers={"User-Agent": "Algorithm-Practice-in-Industry/1.0"},
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    feed = feedparser.parse(response.content)
-    if getattr(feed, "bozo", False) and not feed.entries:
-        raise RuntimeError(f"arXiv returned an invalid feed: {feed.bozo_exception}")
-    return [normalize_entry(entry) for entry in feed.entries]
+    papers = []
+    pages = _result_pages(max_results)
+    for page_index, (start, page_limit) in enumerate(pages):
+        response = requests.get(
+            ARXIV_API_URL,
+            params={
+                "search_query": query,
+                "start": start,
+                "max_results": page_limit,
+                "sortBy": "submittedDate",
+                "sortOrder": "descending",
+            },
+            headers={
+                "Accept": "application/atom+xml",
+                "User-Agent": "Algorithm-Practice-in-Industry/1.0",
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        feed = feedparser.parse(response.content)
+        if getattr(feed, "bozo", False) and not feed.entries:
+            raise RuntimeError(f"arXiv returned an invalid feed: {feed.bozo_exception}")
+        papers.extend(normalize_entry(entry) for entry in feed.entries)
+        if len(feed.entries) < page_limit:
+            break
+        if pause_seconds > 0 and page_index < len(pages) - 1:
+            time.sleep(pause_seconds)
+    return papers
 
 
 def _shorten(text: str, limit: int = 360) -> str:
