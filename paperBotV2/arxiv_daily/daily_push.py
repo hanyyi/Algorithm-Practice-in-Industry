@@ -221,7 +221,7 @@ def main() -> int:
     selected = select_papers(recent, now, args.limit, args.lookback_days)
 
     send_card(
-        f"📚 arXiv Recommender Papers · {date.today().isoformat()}",
+        f"📚 日推 · arXiv Recommender Papers · {date.today().isoformat()}",
         build_markdown(selected),
         color="blue",
         dry_run=args.dry_run,
