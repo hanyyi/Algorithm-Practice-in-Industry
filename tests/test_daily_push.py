@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 from paperBotV2.arxiv_daily.arxiv_feishu_msg import send_papers_to_feishu
 from paperBotV2.arxiv_daily.daily_push import (
+    _result_pages,
     build_markdown as build_arxiv_markdown,
     relevance_score as arxiv_relevance_score,
     select_papers as select_arxiv_papers,
@@ -211,6 +212,10 @@ class ConferencePushTests(unittest.TestCase):
 
 
 class ArxivPushTests(unittest.TestCase):
+    def test_arxiv_candidate_pool_is_split_into_api_safe_pages(self):
+        self.assertEqual(_result_pages(300), [(0, 100), (100, 100), (200, 100)])
+        self.assertEqual(_result_pages(250), [(0, 100), (100, 100), (200, 50)])
+
     def test_builds_clean_semantic_scholar_id(self):
         paper = {
             "url": "https://arxiv.org/abs/2608.04807v1",
