@@ -82,10 +82,10 @@ def generate_chinese_summaries(
     api_key: str | None = None,
     api_url: str | None = None,
     model: str | None = None,
-    timeout: int = 60,
+    timeout: int = 90,
     attempts: int = 2,
 ) -> dict[str, str]:
-    """Return Chinese summaries keyed by id, or an empty mapping on any API failure.
+    """Return Chinese summaries keyed by id, with per-batch English fallback.
 
     The helper deliberately skips items without source abstracts. This prevents the LLM
     from inventing a paper summary from a title alone. Callers keep their English source
@@ -104,59 +104,68 @@ def generate_chinese_summaries(
         summary = " ".join(str(item.get("summary") or "").split())
         if item_id and title and summary:
             normalized.append(
-                {"id": item_id, "title": title[:600], "abstract": summary[:5000]}
+                {"id": item_id, "title": title[:600], "abstract": summary[:2500]}
             )
     if not normalized:
         return {}
 
     endpoint = api_url or os.environ.get("LLM_API_URL", DEFAULT_LLM_API_URL)
     selected_model = model or os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
-    request_payload = {
-        "model": selected_model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": "Translate these records:\n" + json.dumps(normalized, ensure_ascii=False),
-            },
-        ],
-        "temperature": 0.1,
-        "max_tokens": min(6000, max(1200, len(normalized) * 700)),
-        "thinking": {"type": "disabled"},
-    }
-
-    last_error: Exception | None = None
-    for attempt in range(max(1, attempts)):
-        try:
-            response = requests.post(
-                endpoint,
-                headers={
-                    "Authorization": f"Bearer {key.strip()}",
-                    "Content-Type": "application/json",
-                    "User-Agent": "Algorithm-Practice-in-Industry/1.0",
+    all_summaries: dict[str, str] = {}
+    for start in range(0, len(normalized), 3):
+        batch = normalized[start : start + 3]
+        request_payload = {
+            "model": selected_model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": "Translate these records:\n"
+                    + json.dumps(batch, ensure_ascii=False),
                 },
-                json=request_payload,
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            message = response.json()["choices"][0]["message"]
-            content = message.get("content") or message.get("reasoning_content") or ""
-            summaries = _parse_summaries(content, normalized)
-            print(
-                f"Generated {len(summaries)} Chinese summaries with {selected_model}"
-            )
-            return summaries
-        except (
-            KeyError,
-            IndexError,
-            TypeError,
-            ValueError,
-            RuntimeError,
-            requests.RequestException,
-        ) as exc:
-            last_error = exc
-            if attempt + 1 < max(1, attempts):
-                time.sleep(attempt + 1)
+            ],
+            "temperature": 0.1,
+            "max_tokens": max(1200, len(batch) * 700),
+            "thinking": {"type": "disabled"},
+        }
 
-    print(f"Warning: LLM Chinese summaries unavailable; keeping English: {last_error}")
-    return {}
+        last_error: Exception | None = None
+        for attempt in range(max(1, attempts)):
+            try:
+                response = requests.post(
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {key.strip()}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "Algorithm-Practice-in-Industry/1.0",
+                    },
+                    json=request_payload,
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                message = response.json()["choices"][0]["message"]
+                content = message.get("content") or message.get("reasoning_content") or ""
+                all_summaries.update(_parse_summaries(content, batch))
+                break
+            except (
+                KeyError,
+                IndexError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+                requests.RequestException,
+            ) as exc:
+                last_error = exc
+                if attempt + 1 < max(1, attempts):
+                    time.sleep(attempt + 1)
+        else:
+            print(
+                "Warning: one LLM summary batch was unavailable; keeping English: "
+                f"{last_error}"
+            )
+
+    if all_summaries:
+        print(
+            f"Generated {len(all_summaries)} Chinese summaries with {selected_model}"
+        )
+    return all_summaries
