@@ -226,7 +226,7 @@ def main() -> int:
     )
     if not recent:
         send_card(
-            f"🏭 日推 · Recommender Systems in Industry · {args.date.isoformat()}",
+            f"🏭 Daily Digest · Recommender Systems in Industry · {args.date.isoformat()}",
             f"No relevant recommender-system article was published in the last "
             f"{args.lookback_days} days; no stale content was used.",
             color="turquoise",
@@ -247,7 +247,7 @@ def main() -> int:
     )
 
     send_card(
-        f"🏭 日推 · Recommender Systems in Industry · {args.date.isoformat()}",
+        f"🏭 Daily Digest · Recommender Systems in Industry · {args.date.isoformat()}",
         build_markdown(selected),
         color="turquoise",
         dry_run=args.dry_run,
