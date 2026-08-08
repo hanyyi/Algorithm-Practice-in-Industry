@@ -500,6 +500,12 @@ class LLMEnrichmentTests(unittest.TestCase):
         )
         self.assertEqual(request.kwargs["json"]["model"], "deepseek-v4-flash-free")
         self.assertEqual(
+            request.kwargs["json"]["thinking"], {"type": "disabled"}
+        )
+        self.assertEqual(
+            request.kwargs["json"]["response_format"], {"type": "json_object"}
+        )
+        self.assertEqual(
             request.kwargs["headers"]["Authorization"], "Bearer secret-value"
         )
 
