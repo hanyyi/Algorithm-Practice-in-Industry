@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Iterable
 
 import requests
@@ -27,6 +29,7 @@ from paperBotV2.relevance import (
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ARXIV_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+DEFAULT_SNAPSHOT_DIR = Path(__file__).resolve().parent / "data"
 DEFAULT_CATEGORIES = ("cs.IR", "cs.CL", "cs.LG")
 ARXIV_ID_PATTERN = re.compile(
     r"arxiv\.org/(?:abs|pdf)/([^\s/?#]+)", re.IGNORECASE
@@ -78,6 +81,69 @@ def normalize_s2_entry(paper: dict) -> dict:
             paper.get("influentialCitationCount") or 0
         ),
     }
+
+
+def load_recent_snapshot_papers(
+    directory: Path, now: datetime, lookback_days: int, limit: int
+) -> list[dict]:
+    """Load the newest still-in-window arXiv snapshot without using old translations."""
+
+    if limit <= 0:
+        return []
+    cutoff = now.date() - timedelta(days=max(1, lookback_days))
+    candidates = []
+    for path in directory.glob("????????.json"):
+        try:
+            snapshot_date = datetime.strptime(path.stem, "%Y%m%d").date()
+        except ValueError:
+            continue
+        if cutoff <= snapshot_date <= now.date():
+            candidates.append((snapshot_date, path))
+    if not candidates:
+        return []
+
+    _, path = max(candidates)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"Warning: skipped invalid arXiv snapshot {path.name}: {exc}")
+        return []
+    if not isinstance(payload, dict):
+        return []
+
+    papers = []
+    for key, item in payload.items():
+        if not isinstance(item, dict):
+            continue
+        arxiv_id = str(item.get("arxiv_id") or key).strip()
+        try:
+            published = datetime.fromisoformat(str(item.get("pub_date") or "")).replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            continue
+        papers.append(
+            {
+                "id": f"https://arxiv.org/abs/{arxiv_id}",
+                "title": " ".join(str(item.get("title") or "").split()),
+                "summary": " ".join(str(item.get("ori_summary") or "").split()),
+                "url": f"https://arxiv.org/abs/{arxiv_id}",
+                "published": published,
+                "authors": [
+                    author.strip()
+                    for author in str(item.get("authors") or "").split(",")
+                    if author.strip()
+                ],
+                "categories": [
+                    category.strip()
+                    for category in str(item.get("categories") or "").split(",")
+                    if category.strip()
+                ],
+            }
+        )
+        if len(papers) >= max(0, limit):
+            break
+    return papers
 
 
 def relevance_score(paper: dict) -> int:
@@ -275,6 +341,21 @@ def main() -> int:
         args.max_results,
         args.lookback_days,
     )
+    if not recent:
+        snapshot = load_recent_snapshot_papers(
+            DEFAULT_SNAPSHOT_DIR, now, args.lookback_days, args.max_results
+        )
+        recent = select_papers(
+            snapshot,
+            now,
+            args.max_results,
+            args.lookback_days,
+        )
+        if recent:
+            print(
+                f"Warning: using {len(recent)} strictly in-window papers from the "
+                "latest local arXiv snapshot"
+            )
     if not recent:
         raise RuntimeError("no recent recommendation-system arXiv papers matched")
 
