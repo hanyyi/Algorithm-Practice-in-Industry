@@ -278,7 +278,7 @@ def main() -> int:
     selected.extend(fallback)
     if not selected:
         send_card(
-            f"🏆 日推 · Top-Conference Recommender Papers · {args.date.isoformat()}",
+            f"🏆 Daily Digest · Top-Conference Recommender Papers · {args.date.isoformat()}",
             f"No relevant paper was found in the last {args.lookback_days} days "
             f"or the {args.date.year} conference editions; no prior-year fallback was used.",
             color="purple",
@@ -288,7 +288,7 @@ def main() -> int:
         return 0
 
     send_card(
-        f"🏆 日推 · Top-Conference Recommender Papers · {args.date.isoformat()}",
+        f"🏆 Daily Digest · Top-Conference Recommender Papers · {args.date.isoformat()}",
         build_markdown(selected),
         color="purple",
         dry_run=args.dry_run,
