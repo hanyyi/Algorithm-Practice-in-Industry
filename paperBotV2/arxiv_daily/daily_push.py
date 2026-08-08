@@ -117,21 +117,32 @@ def fetch_papers(
     for page_index, (start, page_limit) in enumerate(pages):
         response = None
         for attempt in range(4):
-            response = requests.get(
-                ARXIV_API_URL,
-                params={
-                    "search_query": query,
-                    "start": start,
-                    "max_results": page_limit,
-                    "sortBy": "submittedDate",
-                    "sortOrder": "descending",
-                },
-                headers={
-                    "Accept": "application/atom+xml",
-                    "User-Agent": "Algorithm-Practice-in-Industry/1.0",
-                },
-                timeout=timeout,
-            )
+            try:
+                response = requests.get(
+                    ARXIV_API_URL,
+                    params={
+                        "search_query": query,
+                        "start": start,
+                        "max_results": page_limit,
+                        "sortBy": "submittedDate",
+                        "sortOrder": "descending",
+                    },
+                    headers={
+                        "Accept": "application/atom+xml",
+                        "User-Agent": "Algorithm-Practice-in-Industry/1.0",
+                    },
+                    timeout=timeout,
+                )
+            except requests.RequestException as exc:
+                if attempt == 3:
+                    raise
+                wait_seconds = 5.0 * (attempt + 1)
+                print(
+                    f"Warning: arXiv request failed ({type(exc).__name__}); "
+                    f"retrying in {wait_seconds:g}s"
+                )
+                time.sleep(wait_seconds)
+                continue
             if response.status_code not in ARXIV_RETRYABLE_STATUS or attempt == 3:
                 break
             retry_after = response.headers.get("Retry-After", "")
