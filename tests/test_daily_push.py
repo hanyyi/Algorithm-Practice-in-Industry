@@ -502,9 +502,7 @@ class LLMEnrichmentTests(unittest.TestCase):
         self.assertEqual(
             request.kwargs["json"]["thinking"], {"type": "disabled"}
         )
-        self.assertEqual(
-            request.kwargs["json"]["response_format"], {"type": "json_object"}
-        )
+        self.assertNotIn("response_format", request.kwargs["json"])
         self.assertEqual(
             request.kwargs["headers"]["Authorization"], "Bearer secret-value"
         )
@@ -542,6 +540,35 @@ class LLMEnrichmentTests(unittest.TestCase):
             ),
             {},
         )
+
+    @patch("paperBotV2.llm_enrichment.requests.post")
+    def test_parses_tagged_summaries_in_input_order(self, post):
+        response = Mock()
+        response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "<summary>第一篇讨论推荐系统候选生成。</summary>\n"
+                            "<summary>第二篇研究个性化搜索排序。</summary>"
+                        )
+                    }
+                }
+            ]
+        }
+        post.return_value = response
+
+        summaries = generate_chinese_summaries(
+            [
+                {"id": "a", "title": "A", "summary": "Candidate generation."},
+                {"id": "b", "title": "B", "summary": "Personalized search."},
+            ],
+            api_key="secret-value",
+            attempts=1,
+        )
+
+        self.assertIn("候选生成", summaries["a"])
+        self.assertIn("个性化搜索", summaries["b"])
 
 
 class PublicMetricsTests(unittest.TestCase):
