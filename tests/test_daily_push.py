@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
@@ -9,6 +10,7 @@ from paperBotV2.arxiv_daily.arxiv_feishu_msg import send_papers_to_feishu
 from paperBotV2.arxiv_daily.daily_push import (
     _result_pages,
     build_markdown as build_arxiv_markdown,
+    fetch_papers as fetch_arxiv_papers,
     relevance_score as arxiv_relevance_score,
     select_papers as select_arxiv_papers,
     semantic_scholar_id,
@@ -218,6 +220,23 @@ class ArxivPushTests(unittest.TestCase):
     def test_arxiv_candidate_pool_is_split_into_api_safe_pages(self):
         self.assertEqual(_result_pages(300), [(0, 100), (100, 100), (200, 100)])
         self.assertEqual(_result_pages(250), [(0, 100), (100, 100), (200, 50)])
+
+    @patch("paperBotV2.arxiv_daily.daily_push.time.sleep")
+    @patch("paperBotV2.arxiv_daily.daily_push.requests.get")
+    def test_arxiv_retries_rate_limits_before_parsing(self, get, sleep):
+        limited = Mock(status_code=429, headers={"Retry-After": "1"})
+        success = Mock(status_code=200, headers={}, content=b"<feed></feed>")
+        get.side_effect = [limited, success]
+        feedparser = Mock()
+        feedparser.parse.return_value = Mock(entries=[], bozo=False)
+
+        with patch.dict(sys.modules, {"feedparser": feedparser}):
+            self.assertEqual(
+                fetch_arxiv_papers(["cs.IR"], 1, pause_seconds=0),
+                [],
+            )
+        self.assertEqual(get.call_count, 2)
+        sleep.assert_called_once_with(5.0)
 
     def test_builds_clean_semantic_scholar_id(self):
         paper = {
