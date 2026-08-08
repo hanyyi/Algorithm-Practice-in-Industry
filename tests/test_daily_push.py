@@ -330,6 +330,47 @@ class ArxivPushTests(unittest.TestCase):
             )
         )
 
+    def test_relevance_rejects_real_generic_false_positives(self):
+        rejected = [
+            (
+                "An Emerging Retail Portfolio Management Application: Personalized, "
+                "Tax-Aware Reinforcement Learning with Natural Language Goals",
+                "Personalized portfolio management for retail investors.",
+            ),
+            (
+                "Mapping Similarity Spaces across Embedding Models with Synthetic Query Probing",
+                "Retrieval-Augmented Generation uses similarity scores to retrieve content.",
+            ),
+            (
+                "Learning to Rank Tensor Network Contraction Plans for GPU-Accelerated "
+                "Quantum Circuit Simulation",
+                "Searches a large plan space and ranks contraction plans for quantum "
+                "simulation workloads.",
+            ),
+            (
+                "From Trajectories to Evidence: Auditable Experimental Records for "
+                "Industrial Research Agents",
+                "Agents run experiments in industrial recommendation settings.",
+            ),
+        ]
+        for title, summary in rejected:
+            with self.subTest(title=title):
+                self.assertFalse(is_recommendation_relevant(title, summary))
+
+    def test_relevance_keeps_direct_product_advice_and_rec_reranking(self):
+        self.assertTrue(
+            is_recommendation_relevant(
+                "Cleo: A Transparent Chatbot for Conversational Commerce",
+                "A controllable conversational product advisor for e-commerce.",
+            )
+        )
+        self.assertTrue(
+            is_recommendation_relevant(
+                "DEGR: Dual Exploration-Driven Generative Re-Ranking",
+                "The re-ranking stage in industrial recommendation systems.",
+            )
+        )
+
 
 class PublicMetricsTests(unittest.TestCase):
     def test_canonical_url_removes_tracking(self):
