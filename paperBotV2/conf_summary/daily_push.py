@@ -7,9 +7,13 @@ import hashlib
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
+
+import requests
+from bs4 import BeautifulSoup
 
 from paperBotV2.conf_summary.conf_daily import DEFAULT_CONFS, match_score
 from paperBotV2.feishu import send_card
@@ -103,6 +107,7 @@ def online_conference_candidates(papers: Iterable[dict]) -> list[dict]:
             "influential_citation_count": int(
                 paper.get("influentialCitationCount") or 0
             ),
+            "arxiv_id": str(external_ids.get("ArXiv") or ""),
         }
         normalized["match_score"] = match_score(normalized)
         if (
@@ -115,6 +120,54 @@ def online_conference_candidates(papers: Iterable[dict]) -> list[dict]:
         ):
             candidates.append(normalized)
     return candidates
+
+
+def _fetch_arxiv_abstract(arxiv_id: str, timeout: int) -> str:
+    response = requests.get(
+        f"https://arxiv.org/abs/{arxiv_id}",
+        headers={"User-Agent": "Algorithm-Practice-in-Industry/1.0"},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    meta = soup.select_one('meta[name="citation_abstract"]')
+    if meta and meta.get("content"):
+        return " ".join(str(meta.get("content")).split())
+    block = soup.select_one("blockquote.abstract")
+    if block:
+        text = " ".join(block.get_text(" ").split())
+        return re.sub(r"^Abstract:\s*", "", text, flags=re.IGNORECASE)
+    return ""
+
+
+def hydrate_conference_abstracts(
+    papers: Iterable[dict], timeout: int = 30, max_workers: int = 3
+) -> None:
+    """Fill missing conference abstracts from their public arXiv records."""
+
+    missing = [
+        paper
+        for paper in papers
+        if not paper.get("paper_abstract") and paper.get("arxiv_id")
+    ]
+    if not missing:
+        return
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(missing))) as executor:
+        futures = {
+            executor.submit(_fetch_arxiv_abstract, paper["arxiv_id"], timeout): paper
+            for paper in missing
+        }
+        for future in as_completed(futures):
+            paper = futures[future]
+            try:
+                abstract = future.result()
+            except Exception as exc:
+                print(
+                    f"Warning: could not fetch arXiv abstract {paper.get('arxiv_id')}: {exc}"
+                )
+                continue
+            if abstract:
+                paper["paper_abstract"] = abstract
 
 
 def _stable_key(item: dict) -> tuple:
@@ -290,6 +343,11 @@ def main() -> int:
         print("Selected 0 conference papers (no prior-year backfill)")
         return 0
 
+    hydrate_conference_abstracts(selected)
+    print(
+        f"Conference abstracts available: "
+        f"{sum(bool(paper.get('paper_abstract')) for paper in selected)}/{len(selected)}"
+    )
     summaries = (
         {}
         if args.dry_run
