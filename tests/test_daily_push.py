@@ -570,6 +570,46 @@ class LLMEnrichmentTests(unittest.TestCase):
         self.assertIn("候选生成", summaries["a"])
         self.assertIn("个性化搜索", summaries["b"])
 
+    @patch("paperBotV2.llm_enrichment.requests.post")
+    def test_splits_large_digest_into_three_item_batches(self, post):
+        first = Mock()
+        first.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "".join(
+                            f"<summary>第{i}篇推荐系统摘要。</summary>" for i in range(3)
+                        )
+                    }
+                }
+            ]
+        }
+        second = Mock()
+        second.json.return_value = {
+            "choices": [
+                {"message": {"content": "<summary>第四篇推荐系统摘要。</summary>"}}
+            ]
+        }
+        post.side_effect = [first, second]
+
+        summaries = generate_chinese_summaries(
+            [
+                {"id": str(i), "title": f"Title {i}", "summary": "Recommendation."}
+                for i in range(4)
+            ],
+            api_key="secret-value",
+            attempts=1,
+        )
+
+        self.assertEqual(len(summaries), 4)
+        self.assertEqual(post.call_count, 2)
+        self.assertTrue(
+            all(
+                len(call.kwargs["json"]["messages"][1]["content"]) < 10000
+                for call in post.call_args_list
+            )
+        )
+
 
 class PublicMetricsTests(unittest.TestCase):
     def test_canonical_url_removes_tracking(self):
