@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -197,3 +197,40 @@ def search_s2_conference_papers(
     except (KeyError, TypeError, ValueError) as exc:
         raise RuntimeError("Semantic Scholar returned an invalid search payload") from exc
     return [paper for paper in payload if isinstance(paper, dict) and paper.get("title")]
+
+
+def search_s2_arxiv_papers(
+    *, since: date, until: date, limit: int = 300, timeout: int = 30
+) -> list[dict]:
+    """Find recent arXiv-indexed papers when the official arXiv feed is unavailable."""
+
+    response = _request(
+        "GET",
+        S2_SEARCH_URL,
+        timeout=timeout,
+        params={
+            "query": (
+                "recommendation OR recommender OR personalized search OR user item "
+                "OR candidate generation OR feed ranking OR advertising ranking"
+            ),
+            "publicationDateOrYear": f"{since.isoformat()}:{until.isoformat()}",
+            "fields": (
+                "title,abstract,authors,url,externalIds,citationCount,"
+                "influentialCitationCount,publicationDate,fieldsOfStudy"
+            ),
+            "sort": "publicationDate:desc",
+            "limit": min(max(1, limit), 1000),
+        },
+        headers={"User-Agent": "Algorithm-Practice-in-Industry/1.0"},
+    )
+    try:
+        payload = response.json()["data"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("Semantic Scholar returned an invalid arXiv search payload") from exc
+    return [
+        paper
+        for paper in payload
+        if isinstance(paper, dict)
+        and paper.get("title")
+        and (paper.get("externalIds") or {}).get("ArXiv")
+    ]
