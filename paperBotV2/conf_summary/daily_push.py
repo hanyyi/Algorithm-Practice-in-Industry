@@ -13,6 +13,7 @@ from typing import Iterable
 
 from paperBotV2.conf_summary.conf_daily import DEFAULT_CONFS, match_score
 from paperBotV2.feishu import send_card
+from paperBotV2.llm_enrichment import generate_chinese_summaries
 from paperBotV2.metrics import fetch_s2_metrics, search_s2_conference_papers
 from paperBotV2.relevance import is_recommendation_relevant
 
@@ -194,7 +195,9 @@ def build_markdown(items: Iterable[dict]) -> str:
             f"{int(item.get('citation_count', 0))} citations · "
             f"{int(item.get('influential_citation_count', 0))} influential citations"
         )
-        if abstract:
+        if item.get("summary_zh"):
+            block += f"\n中文解读：{item['summary_zh']}"
+        elif abstract:
             block += f"\nAbstract: {_shorten(str(abstract))}"
         blocks.append(block)
     return "\n\n---\n\n".join(blocks)
@@ -286,6 +289,25 @@ def main() -> int:
         )
         print("Selected 0 conference papers (no prior-year backfill)")
         return 0
+
+    summaries = (
+        {}
+        if args.dry_run
+        else generate_chinese_summaries(
+            [
+                {
+                    "id": str(paper.get("paper_url") or paper.get("paper_name")),
+                    "title": paper.get("paper_name", ""),
+                    "summary": paper.get("paper_abstract", ""),
+                }
+                for paper in selected
+            ]
+        )
+    )
+    for paper in selected:
+        paper_id = str(paper.get("paper_url") or paper.get("paper_name"))
+        if summaries.get(paper_id):
+            paper["summary_zh"] = summaries[paper_id]
 
     send_card(
         f"🏆 Daily Digest · Top-Conference Recommender Papers · {args.date.isoformat()}",
