@@ -21,6 +21,16 @@ TRACKING_PARAMS = {
     "utm_source",
     "utm_term",
 }
+HN_INDUSTRY_QUERIES = (
+    "recommender system",
+    "recommendation system",
+    "personalized search",
+    "feed ranking",
+    "ads ranking",
+    "advertising ranking",
+    "CTR prediction",
+    "candidate generation",
+)
 
 
 class MetricBadRequest(RuntimeError):
@@ -108,6 +118,63 @@ def fetch_hn_metrics(since: datetime, timeout: int = 30) -> dict[str, dict]:
     return result
 
 
+def fetch_hn_industry_articles(
+    since: datetime, timeout: int = 30, queries: Iterable[str] = HN_INDUSTRY_QUERIES
+) -> list[dict]:
+    """Discover recent industry articles submitted to Hacker News.
+
+    HN is a discovery layer rather than an allow-list: callers must still apply
+    the strict recommender-system relevance gate.
+    """
+
+    cutoff = int(since.astimezone(timezone.utc).timestamp())
+    articles: dict[str, dict] = {}
+    for query in queries:
+        response = _request(
+            "GET",
+            HN_SEARCH_URL,
+            timeout=timeout,
+            params={
+                "query": query,
+                "tags": "story",
+                "numericFilters": f"created_at_i>={cutoff}",
+                "hitsPerPage": 200,
+            },
+            headers={"User-Agent": "Algorithm-Practice-in-Industry/1.0"},
+        )
+        try:
+            hits = response.json()["hits"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("Hacker News returned an invalid discovery payload") from exc
+        for hit in hits:
+            url = canonical_url(hit.get("url", ""))
+            title = str(hit.get("title") or "").strip()
+            created = str(hit.get("created_at") or "")[:10]
+            if not url or not title or not created:
+                continue
+            host = urlsplit(url).netloc
+            if host.startswith("www."):
+                host = host[4:]
+            item = {
+                "company": host or "Hacker News",
+                "link": url,
+                "title": title,
+                "summary": str(hit.get("story_text") or "").strip(),
+                "tags": ["Hacker News"],
+                "date": created,
+                "hn_points": int(hit.get("points") or 0),
+                "hn_comments": int(hit.get("num_comments") or 0),
+                "hn_id": str(hit.get("objectID") or ""),
+                "source_priority": 1,
+            }
+            previous = articles.get(url)
+            if previous is None or (
+                item["hn_points"], item["hn_comments"]
+            ) > (previous["hn_points"], previous["hn_comments"]):
+                articles[url] = item
+    return list(articles.values())
+
+
 def attach_hn_metrics(items: Iterable[dict], metrics: dict[str, dict], url_key: str) -> None:
     for item in items:
         item.update(
@@ -122,7 +189,9 @@ def fetch_s2_metrics(identifiers: Iterable[str], timeout: int = 30) -> dict[str,
     """Return Semantic Scholar citation metrics keyed by supplied identifier."""
     ids = [str(identifier) for identifier in identifiers if identifier]
     result: dict[str, dict] = {}
-    fields = "title,citationCount,influentialCitationCount,publicationDate,externalIds"
+    fields = (
+        "title,abstract,citationCount,influentialCitationCount,publicationDate,externalIds"
+    )
     def collect(batch: list[str]) -> None:
         if not batch:
             return
@@ -152,12 +221,15 @@ def fetch_s2_metrics(identifiers: Iterable[str], timeout: int = 30) -> dict[str,
         for identifier, paper in zip(batch, payload):
             if not paper:
                 continue
+            external_ids = paper.get("externalIds") or {}
             result[identifier] = {
                 "citation_count": int(paper.get("citationCount") or 0),
                 "influential_citation_count": int(
                     paper.get("influentialCitationCount") or 0
                 ),
                 "publication_date": str(paper.get("publicationDate") or ""),
+                "paper_abstract": str(paper.get("abstract") or ""),
+                "arxiv_id": str(external_ids.get("ArXiv") or ""),
             }
     for start in range(0, len(ids), 500):
         collect(ids[start : start + 500])
