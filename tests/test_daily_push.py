@@ -28,6 +28,7 @@ from paperBotV2.industry_practice.daily_push import (
     load_articles,
     select_articles,
 )
+from paperBotV2.llm_enrichment import generate_chinese_summaries
 from paperBotV2.metrics import (
     canonical_url,
     fetch_hn_metrics,
@@ -101,7 +102,7 @@ class IndustryPushTests(unittest.TestCase):
                 "title": "GenRec: LLM-Native Recommendation at Scale",
                 "summary": "A recommender system for personalized content.",
                 "title_zh": "不应显示的中文标题",
-                "summary_zh": "不应显示的中文摘要",
+                "summary_zh": "面向个性化内容的推荐系统。",
                 "link": "https://example.com/rec",
                 "tags": ["Recommendation"],
                 "date": "2026-08-04",
@@ -113,7 +114,8 @@ class IndustryPushTests(unittest.TestCase):
         self.assertEqual([item["link"] for item in selected], ["https://example.com/rec"])
         markdown = build_industry_markdown(selected)
         self.assertIn("GenRec: LLM-Native Recommendation at Scale", markdown)
-        self.assertNotIn("不应显示", markdown)
+        self.assertIn("中文解读：面向个性化内容的推荐系统。", markdown)
+        self.assertNotIn("不应显示的中文标题", markdown)
 
 
 class ConferencePushTests(unittest.TestCase):
@@ -203,12 +205,13 @@ class ConferencePushTests(unittest.TestCase):
             },
         ])
         papers[0]["title_zh"] = "不应显示的中文标题"
-        papers[0]["summary_zh"] = "不应显示的中文摘要"
+        papers[0]["summary_zh"] = "面向工业推荐系统的统一建模方法。"
 
         self.assertEqual([paper["paper_url"] for paper in papers], ["https://example.com/rec"])
         markdown = build_conf_markdown(papers)
         self.assertIn("OneTrans for Industrial Recommender Systems", markdown)
-        self.assertNotIn("不应显示", markdown)
+        self.assertIn("中文解读：面向工业推荐系统的统一建模方法。", markdown)
+        self.assertNotIn("不应显示的中文标题", markdown)
 
 
 class ArxivPushTests(unittest.TestCase):
@@ -296,7 +299,7 @@ class ArxivPushTests(unittest.TestCase):
                 "title": "Dual Exploration for Generative Re-Ranking",
                 "summary": "An industrial recommendation system for personalized item ranking.",
                 "title_zh": "不应显示的中文标题",
-                "summary_zh": "不应显示的中文摘要",
+                "summary_zh": "面向个性化物品排序的工业推荐系统。",
                 "url": "https://arxiv.org/abs/2",
                 "published": now,
                 "categories": ["cs.IR"],
@@ -308,7 +311,8 @@ class ArxivPushTests(unittest.TestCase):
         self.assertEqual([paper["id"] for paper in selected], ["rec"])
         markdown = build_arxiv_markdown(selected)
         self.assertIn("Dual Exploration for Generative Re-Ranking", markdown)
-        self.assertNotIn("不应显示", markdown)
+        self.assertIn("中文解读：面向个性化物品排序的工业推荐系统。", markdown)
+        self.assertNotIn("不应显示的中文标题", markdown)
 
     def test_relevance_avoids_generic_recommend_and_supports_ads_ranking(self):
         self.assertFalse(
@@ -369,6 +373,90 @@ class ArxivPushTests(unittest.TestCase):
                 "DEGR: Dual Exploration-Driven Generative Re-Ranking",
                 "The re-ranking stage in industrial recommendation systems.",
             )
+        )
+
+
+class LLMEnrichmentTests(unittest.TestCase):
+    @patch("paperBotV2.llm_enrichment.requests.post")
+    def test_batches_open_code_summaries_with_the_free_model(self, post):
+        response = Mock()
+        response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "paper-1": "该方法改进推荐系统的候选生成与重排序。",
+                                "paper-2": "该研究分析个性化搜索中的用户行为。",
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+        post.return_value = response
+
+        summaries = generate_chinese_summaries(
+            [
+                {
+                    "id": "paper-1",
+                    "title": "Recommendation Ranking",
+                    "summary": "A candidate generation and reranking method.",
+                },
+                {
+                    "id": "paper-2",
+                    "title": "Personalized Search",
+                    "summary": "A study of user behavior in search.",
+                },
+            ],
+            api_key="secret-value",
+            attempts=1,
+        )
+
+        self.assertEqual(len(summaries), 2)
+        self.assertEqual(post.call_count, 1)
+        request = post.call_args
+        self.assertEqual(
+            request.args[0], "https://opencode.ai/zen/v1/chat/completions"
+        )
+        self.assertEqual(request.kwargs["json"]["model"], "deepseek-v4-flash-free")
+        self.assertEqual(
+            request.kwargs["headers"]["Authorization"], "Bearer secret-value"
+        )
+
+    @patch("paperBotV2.llm_enrichment.requests.post")
+    def test_missing_key_and_missing_abstract_keep_english_without_api_call(self, post):
+        self.assertEqual(
+            generate_chinese_summaries(
+                [{"id": "paper-1", "title": "Recommendation", "summary": ""}],
+                api_key="",
+            ),
+            {},
+        )
+        post.assert_not_called()
+
+    @patch("paperBotV2.llm_enrichment.requests.post")
+    def test_invalid_response_falls_back_without_raising(self, post):
+        response = Mock()
+        response.json.return_value = {
+            "choices": [{"message": {"content": "not valid json"}}]
+        }
+        post.return_value = response
+
+        self.assertEqual(
+            generate_chinese_summaries(
+                [
+                    {
+                        "id": "paper-1",
+                        "title": "Recommendation",
+                        "summary": "A recommender-system abstract.",
+                    }
+                ],
+                api_key="secret-value",
+                attempts=1,
+            ),
+            {},
         )
 
 
@@ -484,21 +572,17 @@ class FeishuClientTests(unittest.TestCase):
 
 
 class ChineseEnrichmentTests(unittest.TestCase):
-    @patch("paperBotV2.github_models.requests.get")
-    def test_translates_title_and_summary_to_chinese(self, get):
-        title_response = Mock()
-        title_response.json.return_value = [[['中文论文标题', 'English title']]]
-        summary_response = Mock()
-        summary_response.json.return_value = [[['中文论文摘要。', 'English abstract']]]
-        get.side_effect = [title_response, summary_response]
+    @patch("paperBotV2.github_models.generate_chinese_summaries")
+    def test_legacy_helper_uses_llm_summary_without_translating_title(self, generate):
+        generate.return_value = {"paper-1": "高质量中文论文摘要。"}
 
         result = enrich_chinese(
             [{"id": "paper-1", "title": "English title", "summary": "English abstract"}]
         )
 
-        self.assertEqual(result["paper-1"]["title_zh"], "中文论文标题")
-        self.assertEqual(result["paper-1"]["summary_zh"], "中文论文摘要。")
-        self.assertEqual(get.call_count, 2)
+        self.assertNotIn("title_zh", result["paper-1"])
+        self.assertEqual(result["paper-1"]["summary_zh"], "高质量中文论文摘要。")
+        generate.assert_called_once()
 
 
 if __name__ == "__main__":
