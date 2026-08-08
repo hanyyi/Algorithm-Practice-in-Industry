@@ -13,6 +13,7 @@ from paperBotV2.arxiv_daily.daily_push import (
     _result_pages,
     build_markdown as build_arxiv_markdown,
     fetch_papers as fetch_arxiv_papers,
+    normalize_s2_entry,
     relevance_score as arxiv_relevance_score,
     select_papers as select_arxiv_papers,
     semantic_scholar_id,
@@ -38,6 +39,7 @@ from paperBotV2.metrics import (
     fetch_hn_metrics,
     fetch_s2_metrics,
     search_s2_conference_papers,
+    search_s2_arxiv_papers,
 )
 from paperBotV2.relevance import is_recommendation_relevant
 
@@ -249,6 +251,24 @@ class ArxivPushTests(unittest.TestCase):
             "id": "http://arxiv.org/abs/2608.04807v1",
         }
         self.assertEqual(semantic_scholar_id(paper), "ARXIV:2608.04807")
+
+    def test_normalizes_semantic_scholar_arxiv_fallback(self):
+        paper = normalize_s2_entry(
+            {
+                "title": "Recommendation Ranking",
+                "abstract": "Personalized item ranking.",
+                "publicationDate": "2026-08-07",
+                "externalIds": {"ArXiv": "2608.00001"},
+                "authors": [{"name": "A"}],
+                "citationCount": 2,
+                "influentialCitationCount": 1,
+                "fieldsOfStudy": ["Computer Science"],
+            }
+        )
+
+        self.assertEqual(paper["url"], "https://arxiv.org/abs/2608.00001")
+        self.assertEqual(paper["citation_count"], 2)
+        self.assertEqual(paper["published"].date(), date(2026, 8, 7))
 
     def test_requires_weekly_dates_and_prioritizes_public_metrics(self):
         now = datetime(2026, 8, 5, tzinfo=timezone.utc)
@@ -554,6 +574,28 @@ class PublicMetricsTests(unittest.TestCase):
         params = request.call_args.kwargs["params"]
         self.assertEqual(params["publicationDateOrYear"], "2026")
         self.assertEqual(params["venue"], "KDD,SIGIR")
+
+    @patch("paperBotV2.metrics.requests.request")
+    def test_searches_recent_arxiv_fallback(self, request):
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "data": [
+                {
+                    "title": "Recommendation Ranking",
+                    "externalIds": {"ArXiv": "2608.00001"},
+                },
+                {"title": "No arXiv id", "externalIds": {}},
+            ]
+        }
+        request.return_value = response
+
+        papers = search_s2_arxiv_papers(
+            since=date(2026, 8, 1), until=date(2026, 8, 7)
+        )
+
+        self.assertEqual(len(papers), 1)
+        params = request.call_args.kwargs["params"]
+        self.assertEqual(params["publicationDateOrYear"], "2026-08-01:2026-08-07")
 
 
 class FeishuClientTests(unittest.TestCase):
