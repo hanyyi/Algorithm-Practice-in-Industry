@@ -21,6 +21,7 @@ from paperBotV2.relevance import (
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
+ARXIV_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 DEFAULT_CATEGORIES = ("cs.IR", "cs.CL", "cs.LG")
 ARXIV_ID_PATTERN = re.compile(
     r"arxiv\.org/(?:abs|pdf)/([^\s/?#]+)", re.IGNORECASE
@@ -114,21 +115,37 @@ def fetch_papers(
     papers = []
     pages = _result_pages(max_results)
     for page_index, (start, page_limit) in enumerate(pages):
-        response = requests.get(
-            ARXIV_API_URL,
-            params={
-                "search_query": query,
-                "start": start,
-                "max_results": page_limit,
-                "sortBy": "submittedDate",
-                "sortOrder": "descending",
-            },
-            headers={
-                "Accept": "application/atom+xml",
-                "User-Agent": "Algorithm-Practice-in-Industry/1.0",
-            },
-            timeout=timeout,
-        )
+        response = None
+        for attempt in range(4):
+            response = requests.get(
+                ARXIV_API_URL,
+                params={
+                    "search_query": query,
+                    "start": start,
+                    "max_results": page_limit,
+                    "sortBy": "submittedDate",
+                    "sortOrder": "descending",
+                },
+                headers={
+                    "Accept": "application/atom+xml",
+                    "User-Agent": "Algorithm-Practice-in-Industry/1.0",
+                },
+                timeout=timeout,
+            )
+            if response.status_code not in ARXIV_RETRYABLE_STATUS or attempt == 3:
+                break
+            retry_after = response.headers.get("Retry-After", "")
+            try:
+                wait_seconds = max(float(retry_after), 5.0 * (attempt + 1))
+            except ValueError:
+                wait_seconds = 5.0 * (attempt + 1)
+            wait_seconds = min(wait_seconds, 30.0)
+            print(
+                f"Warning: arXiv returned HTTP {response.status_code}; "
+                f"retrying in {wait_seconds:g}s"
+            )
+            time.sleep(wait_seconds)
+        assert response is not None
         response.raise_for_status()
         feed = feedparser.parse(response.content)
         if getattr(feed, "bozo", False) and not feed.entries:
