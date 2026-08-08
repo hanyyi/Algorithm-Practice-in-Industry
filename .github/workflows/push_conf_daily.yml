@@ -21,6 +21,9 @@ jobs:
     env:
       TZ: "America/Los_Angeles"
       FEISHU_URL: ${{ secrets.FEISHU_URL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_API_URL: "https://opencode.ai/zen/v1/chat/completions"
+      LLM_MODEL: "deepseek-v4-flash-free"
       INDUSTRY_LIMIT: "5"
       CONF_LIMIT: "3"
       ARXIV_LIMIT: "10"
