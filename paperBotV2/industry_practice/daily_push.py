@@ -16,6 +16,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from paperBotV2.feishu import send_card
+from paperBotV2.llm_enrichment import generate_chinese_summaries
 from paperBotV2.metrics import attach_hn_metrics, fetch_hn_metrics
 from paperBotV2.relevance import (
     is_recommendation_relevant,
@@ -185,8 +186,11 @@ def build_markdown(items: Iterable[dict]) -> str:
             f"\nMetrics: HN {int(item.get('hn_points', 0))} points/"
             f"{int(item.get('hn_comments', 0))} comments"
         )
+        summary_zh = item.get("summary_zh")
         summary = item.get("summary")
-        if summary:
+        if summary_zh:
+            block += f"\n中文解读：{summary_zh}"
+        elif summary:
             block += f"\nSummary: {summary}"
         blocks.append(block)
     return "\n\n---\n\n".join(blocks)
@@ -245,6 +249,24 @@ def main() -> int:
     selected = select_articles(
         recent, args.date, args.limit, wanted_tags, args.lookback_days
     )
+    summaries = (
+        {}
+        if args.dry_run
+        else generate_chinese_summaries(
+            [
+                {
+                    "id": str(item.get("link")),
+                    "title": item.get("title", ""),
+                    "summary": item.get("summary", ""),
+                }
+                for item in selected
+            ]
+        )
+    )
+    for item in selected:
+        item_id = str(item.get("link"))
+        if summaries.get(item_id):
+            item["summary_zh"] = summaries[item_id]
 
     send_card(
         f"🏭 Daily Digest · Recommender Systems in Industry · {args.date.isoformat()}",
