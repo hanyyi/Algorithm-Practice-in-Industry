@@ -26,9 +26,9 @@
 
 当前仓库主线代码位于 `paperBotV2/`，主要维护搜广推方向的论文、顶会和工业实践内容：
 
-- **arXiv 每日论文**：抓取 `cs.IR` 等方向新论文，使用大模型进行粗排、精排和摘要翻译，生成每日 JSON 与网页，并支持飞书群推送。
+- **arXiv 每日论文**：抓取 `cs.IR` 等方向新论文，日推先做推荐/搜索/广告强相关过滤，保留来源英文标题与摘要并支持飞书群推送。
 - **顶会论文汇总**：维护 ACL、CIKM、ECIR、EMNLP、ICLR、ICML、KDD、NAACL、NIPS、RecSys、SIGIR、WSDM、WWW 等会议论文列表，生成按会议和年份组织的 Markdown 页面。
-- **顶会论文日推**：从 `paperBotV2/conf_summary/data/results.json` 中挑选推荐、搜索、广告相关论文，补全摘要、翻译摘要，并通过飞书机器人推送。
+- **顶会论文日推**：从 `paperBotV2/conf_summary/data/results.json` 中挑选推荐、搜索、广告相关论文，保留英文标题和公开质量指标，并通过飞书机器人推送。
 - **行业实践文章**：维护大厂搜广推、广告、搜索、推荐、生成式等实践文章，支持 Issue 驱动更新 README、数据文件和网页版本。
 - **GitHub Actions 自动化**：通过 workflow 定时或按 Issue 标签触发 arXiv 更新、飞书通知、顶会更新、会议日推和行业实践页面部署。
 
@@ -89,7 +89,6 @@
 | [2023](paperBotV2/conf_summary/data/papers/acl/acl2023.md) | [2023](paperBotV2/conf_summary/data/papers/cikm/cikm2023.md) | [2023](paperBotV2/conf_summary/data/papers/ecir/ecir2023.md) | [2023](paperBotV2/conf_summary/data/papers/emnlp/emnlp2023.md) | [2023](paperBotV2/conf_summary/data/papers/iclr/iclr2023.md) | [2023](paperBotV2/conf_summary/data/papers/icml/icml2023.md) | [2023](paperBotV2/conf_summary/data/papers/kdd/kdd2023.md) | 2023 | [2023](paperBotV2/conf_summary/data/papers/nips/nips2023.md) | [2023](paperBotV2/conf_summary/data/papers/recsys/recsys2023.md) | [2023](paperBotV2/conf_summary/data/papers/sigir/sigir2023.md) | [2023](paperBotV2/conf_summary/data/papers/wsdm/wsdm2023.md) | [2023](paperBotV2/conf_summary/data/papers/www/www2023.md) |
 | [2024](paperBotV2/conf_summary/data/papers/acl/acl2024.md) | [2024](paperBotV2/conf_summary/data/papers/cikm/cikm2024.md) | [2024](paperBotV2/conf_summary/data/papers/ecir/ecir2024.md) | [2024](paperBotV2/conf_summary/data/papers/emnlp/emnlp2024.md) | [2024](paperBotV2/conf_summary/data/papers/iclr/iclr2024.md) | [2024](paperBotV2/conf_summary/data/papers/icml/icml2024.md) | [2024](paperBotV2/conf_summary/data/papers/kdd/kdd2024.md) | [2024](paperBotV2/conf_summary/data/papers/naacl/naacl2024.md) | [2024](paperBotV2/conf_summary/data/papers/nips/nips2024.md) | [2024](paperBotV2/conf_summary/data/papers/recsys/recsys2024.md) | [2024](paperBotV2/conf_summary/data/papers/sigir/sigir2024.md) | [2024](paperBotV2/conf_summary/data/papers/wsdm/wsdm2024.md) | [2024](paperBotV2/conf_summary/data/papers/www/www2024.md) |
 | [2025](paperBotV2/conf_summary/data/papers/acl/acl2025.md) | 2025 | [2025](paperBotV2/conf_summary/data/papers/ecir/ecir2025.md) | 2025 | [2025](paperBotV2/conf_summary/data/papers/iclr/iclr2025.md) | 2025 | [2025](paperBotV2/conf_summary/data/papers/kdd/kdd2025.md) | [2025](paperBotV2/conf_summary/data/papers/naacl/naacl2025.md) | 2025 | [2025](paperBotV2/conf_summary/data/papers/recsys/recsys2025.md) | [2025](paperBotV2/conf_summary/data/papers/sigir/sigir2025.md) | [2025](paperBotV2/conf_summary/data/papers/wsdm/wsdm2025.md) | [2025](paperBotV2/conf_summary/data/papers/www/www2025.md) |
-| 2026 | 2026 | [2026](paperBotV2/conf_summary/data/papers/ecir/ecir2026.md) | 2026 | 2026 | 2026 | [2026](paperBotV2/conf_summary/data/papers/kdd/kdd2026.md) | 2026 | 2026 | 2026 | [2026](paperBotV2/conf_summary/data/papers/sigir/sigir2026.md) | [2026](paperBotV2/conf_summary/data/papers/wsdm/wsdm2026.md) | [2026](paperBotV2/conf_summary/data/papers/www/www2026.md) |
 
 ## 大厂实践文章【✨Newest:网页版本🥹=>[点击查看](https://doragd.github.io/Algorithm-Practice-in-Industry/industry_practice/)】
 
