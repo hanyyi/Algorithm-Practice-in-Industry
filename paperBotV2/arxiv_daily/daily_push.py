@@ -12,6 +12,7 @@ from typing import Iterable
 import requests
 
 from paperBotV2.feishu import send_card
+from paperBotV2.llm_enrichment import generate_chinese_summaries
 from paperBotV2.metrics import attach_hn_metrics, fetch_hn_metrics, fetch_s2_metrics
 from paperBotV2.relevance import (
     is_recommendation_relevant,
@@ -162,8 +163,11 @@ def build_markdown(papers: Iterable[dict]) -> str:
             f"{int(paper.get('influential_citation_count', 0))} influential citations · "
             f"HN {int(paper.get('hn_points', 0))} points/{int(paper.get('hn_comments', 0))} comments"
         )
+        summary_zh = paper.get("summary_zh")
         summary = paper.get("summary")
-        if summary:
+        if summary_zh:
+            block += f"\n中文解读：{summary_zh}"
+        elif summary:
             block += f"\nAbstract: {_shorten(summary)}"
         blocks.append(block)
     return "\n\n---\n\n".join(blocks)
@@ -219,6 +223,24 @@ def main() -> int:
     if metric_sources == 0:
         raise RuntimeError("all arXiv metric providers were unavailable")
     selected = select_papers(recent, now, args.limit, args.lookback_days)
+    summaries = (
+        {}
+        if args.dry_run
+        else generate_chinese_summaries(
+            [
+                {
+                    "id": str(paper.get("id") or paper.get("url")),
+                    "title": paper.get("title", ""),
+                    "summary": paper.get("summary", ""),
+                }
+                for paper in selected
+            ]
+        )
+    )
+    for paper in selected:
+        paper_id = str(paper.get("id") or paper.get("url"))
+        if summaries.get(paper_id):
+            paper["summary_zh"] = summaries[paper_id]
 
     send_card(
         f"📚 Daily Digest · arXiv Recommender Papers · {date.today().isoformat()}",
