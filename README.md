@@ -28,8 +28,8 @@
 
 - **arXiv 每日论文**：抓取 `cs.IR` 等方向新论文，日推先做推荐/搜索/广告强相关过滤，保留来源英文标题与摘要并支持飞书群推送。
 - **顶会论文汇总**：维护 ACL、CIKM、ECIR、EMNLP、ICLR、ICML、KDD、NAACL、NIPS、RecSys、SIGIR、WSDM、WWW 等会议论文列表，生成按会议和年份组织的 Markdown 页面。
-- **顶会论文日推**：从 `paperBotV2/conf_summary/data/results.json` 中挑选推荐、搜索、广告相关论文，保留英文标题和公开质量指标，并通过飞书机器人推送。
-- **行业实践文章**：维护大厂搜广推、广告、搜索、推荐、生成式等实践文章，支持 Issue 驱动更新 README、数据文件和网页版本。
+- **顶会论文日推**：从 `paperBotV2/conf_summary/data/results.json` 中挑选推荐、搜索、广告相关论文，使用 DOI、Semantic Scholar 和 arXiv 补齐公开摘要，保留英文标题和公开质量指标，并通过飞书机器人推送。
+- **行业实践文章**：维护大厂搜广推、广告、搜索、推荐、生成式等实践文章；每日推送会同步原作者文章库，并合并 14 个官方 RSS 与 Hacker News 发现来源，支持 Issue 驱动更新 README、数据文件和网页版本。
 - **GitHub Actions 自动化**：通过 workflow 定时或按 Issue 标签触发 arXiv 更新、飞书通知、顶会更新、会议日推和行业实践页面部署。
 
 ## 代码入口
