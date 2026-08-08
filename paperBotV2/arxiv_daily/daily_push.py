@@ -13,7 +13,12 @@ import requests
 
 from paperBotV2.feishu import send_card
 from paperBotV2.llm_enrichment import generate_chinese_summaries
-from paperBotV2.metrics import attach_hn_metrics, fetch_hn_metrics, fetch_s2_metrics
+from paperBotV2.metrics import (
+    attach_hn_metrics,
+    fetch_hn_metrics,
+    fetch_s2_metrics,
+    search_s2_arxiv_papers,
+)
 from paperBotV2.relevance import (
     is_recommendation_relevant,
     recommendation_relevance_score,
@@ -43,6 +48,35 @@ def normalize_entry(entry) -> dict:
         "published": _parse_datetime(entry.get("published")),
         "authors": [author.get("name", "") for author in entry.get("authors", [])],
         "categories": [tag.get("term", "") for tag in entry.get("tags", [])],
+    }
+
+
+def normalize_s2_entry(paper: dict) -> dict:
+    external_ids = paper.get("externalIds") or {}
+    arxiv_id = str(external_ids.get("ArXiv") or "").strip()
+    if not arxiv_id:
+        return {}
+    published_text = str(paper.get("publicationDate") or "")[:10]
+    try:
+        published = datetime.fromisoformat(published_text).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return {}
+    return {
+        "id": f"https://arxiv.org/abs/{arxiv_id}",
+        "title": " ".join(str(paper.get("title") or "").split()),
+        "summary": " ".join(str(paper.get("abstract") or "").split()),
+        "url": f"https://arxiv.org/abs/{arxiv_id}",
+        "published": published,
+        "authors": [
+            str(author.get("name") or "")
+            for author in paper.get("authors", [])
+            if isinstance(author, dict) and author.get("name")
+        ],
+        "categories": [str(value) for value in paper.get("fieldsOfStudy", []) if value],
+        "citation_count": int(paper.get("citationCount") or 0),
+        "influential_citation_count": int(
+            paper.get("influentialCitationCount") or 0
+        ),
     }
 
 
@@ -222,8 +256,21 @@ def main() -> int:
     args = parse_args()
     categories = [item.strip() for item in args.categories.split(",") if item.strip()]
     now = datetime.now(timezone.utc)
+    try:
+        fetched = fetch_papers(categories, args.max_results)
+    except (requests.RequestException, RuntimeError) as exc:
+        print(
+            f"Warning: official arXiv feed unavailable; using Semantic Scholar "
+            f"arXiv index: {exc}"
+        )
+        fallback = search_s2_arxiv_papers(
+            since=(now - timedelta(days=args.lookback_days)).date(),
+            until=now.date(),
+            limit=args.max_results,
+        )
+        fetched = [normalized for paper in fallback if (normalized := normalize_s2_entry(paper))]
     recent = select_papers(
-        fetch_papers(categories, args.max_results),
+        fetched,
         now,
         args.max_results,
         args.lookback_days,
