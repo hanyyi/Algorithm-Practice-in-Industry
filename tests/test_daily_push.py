@@ -13,6 +13,7 @@ from paperBotV2.arxiv_daily.daily_push import (
     _result_pages,
     build_markdown as build_arxiv_markdown,
     fetch_papers as fetch_arxiv_papers,
+    load_recent_snapshot_papers,
     normalize_s2_entry,
     relevance_score as arxiv_relevance_score,
     select_papers as select_arxiv_papers,
@@ -269,6 +270,39 @@ class ArxivPushTests(unittest.TestCase):
         self.assertEqual(paper["url"], "https://arxiv.org/abs/2608.00001")
         self.assertEqual(paper["citation_count"], 2)
         self.assertEqual(paper["published"].date(), date(2026, 8, 7))
+
+    def test_loads_only_still_fresh_snapshot_source_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "20260805.json").write_text(
+                json.dumps(
+                    {
+                        "2608.03899v1": {
+                            "title": "ATLAS: Learning to Recommend Across Unseen Domains",
+                            "arxiv_id": "2608.03899v1",
+                            "authors": "A, B",
+                            "categories": "cs.IR",
+                            "pub_date": "2026-08-04 16:29:02",
+                            "ori_summary": "A user-item recommendation framework.",
+                            "summary": "不应使用旧中文摘要",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "20260701.json").write_text("{}", encoding="utf-8")
+
+            papers = load_recent_snapshot_papers(
+                root,
+                datetime(2026, 8, 7, tzinfo=timezone.utc),
+                lookback_days=7,
+                limit=10,
+            )
+
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0]["url"], "https://arxiv.org/abs/2608.03899v1")
+        self.assertEqual(papers[0]["summary"], "A user-item recommendation framework.")
+        self.assertNotIn("不应使用", papers[0]["summary"])
 
     def test_requires_weekly_dates_and_prioritizes_public_metrics(self):
         now = datetime(2026, 8, 5, tzinfo=timezone.utc)
