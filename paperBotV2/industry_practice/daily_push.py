@@ -17,7 +17,12 @@ from bs4 import BeautifulSoup
 
 from paperBotV2.feishu import send_card
 from paperBotV2.llm_enrichment import generate_chinese_summaries
-from paperBotV2.metrics import attach_hn_metrics, fetch_hn_metrics
+from paperBotV2.metrics import (
+    attach_hn_metrics,
+    canonical_url,
+    fetch_hn_industry_articles,
+    fetch_hn_metrics,
+)
 from paperBotV2.relevance import (
     is_recommendation_relevant,
     recommendation_relevance_score,
@@ -25,19 +30,31 @@ from paperBotV2.relevance import (
 
 
 DEFAULT_DATA = Path(__file__).resolve().parent / "data" / "article.json"
+UPSTREAM_ARTICLE_DATA_URL = (
+    "https://raw.githubusercontent.com/Doragd/Algorithm-Practice-in-Industry/"
+    "main/paperBotV2/industry_practice/data/article.json"
+)
 DEFAULT_FEEDS = {
     "Netflix TechBlog": "https://netflixtechblog.com/feed",
     "Spotify Engineering": "https://engineering.atspotify.com/feed/",
     "GitHub Engineering": "https://github.blog/engineering/feed/",
     "Pinterest Engineering": "https://medium.com/feed/pinterest-engineering",
     "Airbnb Engineering": "https://medium.com/feed/airbnb-engineering",
+    "Meta Engineering": "https://engineering.fb.com/feed/",
+    "Dropbox Tech": "https://dropbox.tech/feed",
+    "Slack Engineering": "https://slack.engineering/feed/",
+    "Apple Machine Learning Research": "https://machinelearning.apple.com/rss.xml",
+    "Google Research": "https://research.google/blog/rss/",
+    "Amazon Science": "https://www.amazon.science/index.rss",
+    "Meituan Tech": "https://tech.meituan.com/feed/",
+    "PayPal Tech": "https://medium.com/feed/paypal-tech",
+    "Walmart Global Tech": "https://medium.com/feed/walmartglobaltech",
 }
 
 
-def load_articles(path: Path) -> list[dict]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+def _normalize_articles(data: object, *, source_priority: int) -> list[dict]:
     if not isinstance(data, list):
-        raise ValueError(f"expected an article list in {path}")
+        raise ValueError("expected an article list")
     normalized = []
     for item in data:
         if not isinstance(item, dict):
@@ -52,9 +69,31 @@ def load_articles(path: Path) -> list[dict]:
                 "title": item.get("title", item.get("内容", item.get("标题", ""))),
                 "tags": tags or [],
                 "date": item.get("date", item.get("时间", item.get("日期", ""))),
+                "summary": item.get("summary", item.get("摘要", "")),
+                "source_priority": source_priority,
             }
         )
     return normalized
+
+
+def load_articles(path: Path) -> list[dict]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return _normalize_articles(data, source_priority=2)
+    except ValueError as exc:
+        raise ValueError(f"expected an article list in {path}") from exc
+
+
+def fetch_upstream_articles(timeout: int = 30) -> list[dict]:
+    """Load the original author's curated article database on every run."""
+
+    response = requests.get(
+        os.environ.get("INDUSTRY_UPSTREAM_DATA_URL", UPSTREAM_ARTICLE_DATA_URL),
+        headers={"User-Agent": "Algorithm-Practice-in-Industry/1.0"},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return _normalize_articles(response.json(), source_priority=3)
 
 
 def _stable_key(item: dict) -> str:
@@ -95,9 +134,97 @@ def _fetch_feed(company: str, url: str, timeout: int) -> list[dict]:
                 "tags": tags or ["Engineering Blog"],
                 "date": _entry_date(entry),
                 "live": True,
+                "source_priority": 2,
             }
         )
     return articles
+
+
+def merge_articles(*groups: Iterable[dict]) -> list[dict]:
+    """Deduplicate sources while keeping the richest, most trusted record."""
+
+    merged: dict[str, dict] = {}
+    for group in groups:
+        for item in group:
+            link = canonical_url(item.get("link", ""))
+            identity = link or str(item.get("title") or "").strip().lower()
+            if not identity:
+                continue
+            candidate = dict(item)
+            if link:
+                candidate["link"] = link
+            previous = merged.get(identity)
+            if previous is None:
+                merged[identity] = candidate
+                continue
+            preferred, other = sorted(
+                (previous, candidate),
+                key=lambda value: (
+                    int(value.get("source_priority", 0)),
+                    bool(value.get("summary")),
+                ),
+                reverse=True,
+            )
+            combined = dict(other)
+            combined.update(preferred)
+            for key in ("summary", "company", "date", "tags"):
+                if not combined.get(key):
+                    combined[key] = other.get(key) or preferred.get(key)
+            combined["hn_points"] = max(
+                int(previous.get("hn_points", 0)), int(candidate.get("hn_points", 0))
+            )
+            combined["hn_comments"] = max(
+                int(previous.get("hn_comments", 0)),
+                int(candidate.get("hn_comments", 0)),
+            )
+            merged[identity] = combined
+    return list(merged.values())
+
+
+def _fetch_article_summary(item: dict, timeout: int) -> str:
+    response = requests.get(
+        item["link"],
+        headers={"User-Agent": "Mozilla/5.0 Algorithm-Practice-in-Industry/1.0"},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    for selector, attribute in (
+        ('meta[property="og:description"]', "content"),
+        ('meta[name="description"]', "content"),
+        ('meta[name="twitter:description"]', "content"),
+    ):
+        node = soup.select_one(selector)
+        if node and node.get(attribute):
+            summary = _plain_text(str(node.get(attribute)))
+            if len(summary) >= 40:
+                return summary[:5000]
+    article = soup.select_one("article") or soup.select_one("main")
+    if article:
+        return _plain_text(str(article))[:5000]
+    return ""
+
+
+def hydrate_article_summaries(
+    articles: Iterable[dict], timeout: int = 20, max_workers: int = 5
+) -> None:
+    missing = [item for item in articles if item.get("link") and not item.get("summary")]
+    if not missing:
+        return
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(missing))) as executor:
+        futures = {
+            executor.submit(_fetch_article_summary, item, timeout): item
+            for item in missing
+        }
+        for future in as_completed(futures):
+            item = futures[future]
+            try:
+                summary = future.result()
+            except Exception as exc:
+                print(f"Warning: could not read article summary {item.get('link')}: {exc}")
+                continue
+            if summary:
+                item["summary"] = summary
 
 
 def fetch_live_articles(timeout: int = 20) -> list[dict]:
@@ -115,7 +242,9 @@ def fetch_live_articles(timeout: int = 20) -> list[dict]:
         for future in as_completed(futures):
             company = futures[future]
             try:
-                articles.extend(future.result())
+                company_articles = future.result()
+                articles.extend(company_articles)
+                print(f"Industry RSS source: {company}={len(company_articles)}")
             except Exception as exc:
                 print(f"Warning: skipped {company} feed: {exc}")
     return articles
@@ -164,6 +293,7 @@ def select_articles(
             int(item.get("hn_points", 0)),
             int(item.get("hn_comments", 0)),
             industry_relevance(item),
+            int(item.get("source_priority", 0)),
             str(item.get("date", "")),
             _stable_key(item),
         ),
@@ -219,12 +349,37 @@ def main() -> int:
     args = parse_args()
     wanted_tags = {tag.strip() for tag in args.tags.split(",") if tag.strip()} or None
     live_articles = fetch_live_articles()
-    if not live_articles:
-        raise RuntimeError("no live engineering-blog feeds were available; refusing stale fallback")
+    local_articles = load_articles(args.data)
+    try:
+        upstream_articles = fetch_upstream_articles()
+    except Exception as exc:
+        print(f"Warning: original-author article database unavailable: {exc}")
+        upstream_articles = []
+    cutoff_datetime = datetime.combine(
+        args.date - timedelta(days=max(1, args.lookback_days) - 1),
+        time.min,
+        tzinfo=timezone.utc,
+    )
+    try:
+        hn_articles = fetch_hn_industry_articles(cutoff_datetime)
+    except Exception as exc:
+        print(f"Warning: Hacker News discovery unavailable: {exc}")
+        hn_articles = []
+    all_articles = merge_articles(
+        local_articles, upstream_articles, live_articles, hn_articles
+    )
+    print(
+        "Industry source coverage: "
+        f"author-local={len(local_articles)}, author-upstream={len(upstream_articles)}, "
+        f"official-feeds={len(live_articles)}, hn-discovery={len(hn_articles)}, "
+        f"deduplicated={len(all_articles)}"
+    )
+    if not all_articles:
+        raise RuntimeError("no industry article sources were available")
     recent = select_articles(
-        live_articles,
+        all_articles,
         args.date,
-        len(live_articles),
+        len(all_articles),
         wanted_tags,
         args.lookback_days,
     )
@@ -239,16 +394,12 @@ def main() -> int:
         print("Selected 0 industry-practice articles (no stale backfill)")
         return 0
 
-    cutoff_datetime = datetime.combine(
-        args.date - timedelta(days=max(1, args.lookback_days) - 1),
-        time.min,
-        tzinfo=timezone.utc,
-    )
     hn_metrics = fetch_hn_metrics(cutoff_datetime)
     attach_hn_metrics(recent, hn_metrics, "link")
     selected = select_articles(
         recent, args.date, args.limit, wanted_tags, args.lookback_days
     )
+    hydrate_article_summaries(selected)
     summaries = (
         {}
         if args.dry_run
