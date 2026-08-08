@@ -6,6 +6,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import requests
+
 from paperBotV2.arxiv_daily.arxiv_feishu_msg import send_papers_to_feishu
 from paperBotV2.arxiv_daily.daily_push import (
     _result_pages,
@@ -226,7 +228,7 @@ class ArxivPushTests(unittest.TestCase):
     def test_arxiv_retries_rate_limits_before_parsing(self, get, sleep):
         limited = Mock(status_code=429, headers={"Retry-After": "1"})
         success = Mock(status_code=200, headers={}, content=b"<feed></feed>")
-        get.side_effect = [limited, success]
+        get.side_effect = [limited, requests.ReadTimeout("slow response"), success]
         feedparser = Mock()
         feedparser.parse.return_value = Mock(entries=[], bozo=False)
 
@@ -235,8 +237,11 @@ class ArxivPushTests(unittest.TestCase):
                 fetch_arxiv_papers(["cs.IR"], 1, pause_seconds=0),
                 [],
             )
-        self.assertEqual(get.call_count, 2)
-        sleep.assert_called_once_with(5.0)
+        self.assertEqual(get.call_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            [5.0, 10.0],
+        )
 
     def test_builds_clean_semantic_scholar_id(self):
         paper = {
