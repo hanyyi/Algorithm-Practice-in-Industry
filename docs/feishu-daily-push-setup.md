@@ -32,7 +32,7 @@ arXiv 没有公开、稳定的逐篇下载量 API，因此当前不会伪造“�
    git push -u origin main
    ```
 
-2. 在飞书桌面端进入目标群：`群设置` → `群机器人` → `添加机器人` → `自定义机器人`。建议把安全设置中的关键词设为 `日推`（三类消息标题都包含它），然后复制 Webhook 地址。
+2. 在飞书桌面端进入目标群：`群设置` → `群机器人` → `添加机器人` → `自定义机器人`。把安全设置中的关键词设为 `Daily Digest`（三类英文消息标题都包含它），然后复制 Webhook 地址。
 3. 在你的 GitHub 仓库进入 `Settings` → `Secrets and variables` → `Actions` → `New repository secret`，添加：
 
    - `FEISHU_URL`：飞书机器人 Webhook，必填。多个群可用英文逗号分隔多个 Webhook。
