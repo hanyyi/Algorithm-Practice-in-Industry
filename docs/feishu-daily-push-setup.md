@@ -8,13 +8,13 @@
 | 顶会论文 | 每天美西时间 08:00（自动适配 PST/PDT） | `daily_feishu_digest` | 3 篇 |
 | arXiv 每日论文 | 每天美西时间 08:00（自动适配 PST/PDT） | `daily_feishu_digest` | 10 篇 |
 
-行业实践文章会实时读取 Netflix、Spotify、GitHub、Pinterest、Airbnb 等工程博客 RSS；arXiv 读取 cs.IR、cs.CL、cs.LG；顶会范围为 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR。三类内容都先通过推荐系统/搜索排序/广告排序的强相关硬过滤，通用 LLM、Agent、RAG、代码工程和设备分析不会仅凭热度入选。行业和 arXiv 把最近 7 天作为硬门槛；顶会优先近 7 天，不足时只用当年论文按质量补位，绝不回退到往年。每日推送保留英文原标题；配置 `LLM_API_KEY` 后，使用 OpenCode Zen 的 `deepseek-v4-flash-free` 批量生成推荐系统领域中文解读。接口不可用时自动回退来源英文摘要，不影响推送。
+行业实践文章每天合并四层来源：本地作者库、原作者 Doragd 仓库的实时 `article.json`、14 个官方工程/研究 RSS（Netflix、Spotify、Meta、Meituan、Google Research、Amazon Science 等），以及 Hacker News 的搜广推关键词发现；合并后按规范化 URL 去重。原作者历史库主要来自知乎、DataFunTalk 和技术公众号，是人工维护的数据集，并不等同于这些站点的实时订阅。arXiv 读取 cs.IR、cs.CL、cs.LG；顶会范围为 KDD、WWW、CIKM、RecSys、WSDM、SIGIR、ECIR。三类内容都先通过推荐系统/搜索排序/广告排序的强相关硬过滤，通用 LLM、Agent、RAG、代码工程和设备分析不会仅凭热度入选。行业和 arXiv 把最近 7 天作为硬门槛；顶会优先近 7 天，不足时只用当年论文按质量补位，绝不回退到往年。每日推送保留英文原标题；配置 `LLM_API_KEY` 后，使用 OpenCode Zen 的 `deepseek-v4-flash-free` 批量生成推荐系统领域中文解读。顶会记录缺摘要时，会先通过 DOI/Semantic Scholar 找到公开摘要和 arXiv ID，再生成中文解读；接口不可用时自动回退来源英文摘要，不影响推送。
 
 ## 数量与选取规则
 
 `10 + 5 + 3` 只是为了让单次飞书卡片适合通勤阅读而设置的默认数量，并不是质量阈值，也不是仓库限制，可以通过 `ARXIV_LIMIT`、`INDUSTRY_LIMIT` 和 `CONF_LIMIT` 修改。
 
-- 行业文章：先通过推荐系统强相关门槛，再硬过滤最近 7 天，然后按 Hacker News points、评论数、主题相关度、发布时间依次排序。没有进入 Hacker News 的文章指标为 0，再由相关度和时间决定顺序。
+- 行业文章：先通过推荐系统强相关门槛，再硬过滤最近 7 天，然后按 Hacker News points、评论数、主题相关度、来源优先级和发布时间依次排序。没有进入 Hacker News 的文章指标为 0，再由相关度、原作者/官方来源可信度和时间决定顺序。
 - 顶会论文：通过 Semantic Scholar 核实精确发布日期，优先最近 7 天并按引用量、高影响引用量、搜广推主题相关度和发布时间排序；不足默认 3 篇时，用同一套质量规则从当年论文补足。只允许当年补位，不使用往年论文。
 - arXiv：先淘汰没有推荐/个性化/用户物品/CTR-CVR/候选生成/Feed、搜索或广告排序强信号的论文，再硬过滤最近 7 天；通过 Semantic Scholar 获取引用量和高影响引用量，并结合 Hacker News points/评论数排序。默认 10 篇是飞书卡片的阅读上限，不足时不会用无关论文凑数。
 
@@ -49,6 +49,7 @@ Webhook 等同于群机器人的发送凭证，不要写入代码、Issue 或日
 
 - `INDUSTRY_LIMIT`：每天行业文章数量。
 - `INDUSTRY_FEEDS`：可选的工程博客 RSS JSON 映射；不设置时使用仓库默认来源。
+- `INDUSTRY_UPSTREAM_DATA_URL`：可选，原作者实时 `article.json` 地址；默认读取 Doragd 主仓库。
 - `CONF_LIMIT`：每天顶会论文数量。
 - `ARXIV_LIMIT`：每天 arXiv 论文数量。
 - `LOOKBACK_DAYS`：行业文章和顶会论文的硬回看窗口，部署固定为 7 天。
