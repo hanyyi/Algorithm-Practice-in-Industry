@@ -22,6 +22,7 @@ from paperBotV2.arxiv_daily.daily_push import (
 from paperBotV2.conf_summary.daily_push import (
     build_markdown as build_conf_markdown,
     conference_candidates,
+    hydrate_conference_abstracts,
     load_results,
     online_conference_candidates,
     select_papers,
@@ -31,12 +32,16 @@ from paperBotV2.feishu import send_card
 from paperBotV2.github_models import enrich_chinese
 from paperBotV2.industry_practice.daily_push import (
     build_markdown as build_industry_markdown,
+    fetch_upstream_articles,
     load_articles,
+    merge_articles,
     select_articles,
 )
+from paperBotV2.industry_practice import daily_push as industry_daily_push
 from paperBotV2.llm_enrichment import generate_chinese_summaries
 from paperBotV2.metrics import (
     canonical_url,
+    fetch_hn_industry_articles,
     fetch_hn_metrics,
     fetch_s2_metrics,
     search_s2_conference_papers,
@@ -59,6 +64,79 @@ class IndustryPushTests(unittest.TestCase):
         self.assertEqual(articles[0]["title"], "中文格式")
         self.assertEqual(articles[0]["tags"], ["推荐", "搜索"])
         self.assertEqual(articles[1]["company"], "乙")
+
+    @patch("paperBotV2.industry_practice.daily_push.requests.get")
+    def test_fetches_original_authors_curated_database(self, get):
+        response = Mock()
+        response.json.return_value = [
+            {
+                "公司": "美团",
+                "内容": "推荐系统候选生成实践",
+                "链接": "https://example.com/author-source",
+                "标签": "推荐,召回",
+                "时间": "2026-08-07",
+            }
+        ]
+        get.return_value = response
+
+        articles = fetch_upstream_articles()
+
+        self.assertEqual(articles[0]["company"], "美团")
+        self.assertEqual(articles[0]["source_priority"], 3)
+        self.assertIn("Doragd/Algorithm-Practice-in-Industry", get.call_args.args[0])
+
+    def test_merges_author_feed_and_hn_records_by_canonical_url(self):
+        merged = merge_articles(
+            [{
+                "title": "Recommendation Ranking",
+                "link": "https://example.com/post?utm_source=author",
+                "company": "Author DB",
+                "date": "2026-08-07",
+                "source_priority": 3,
+            }],
+            [{
+                "title": "Recommendation Ranking",
+                "link": "https://www.example.com/post",
+                "summary": "A personalized recommendation ranking system.",
+                "hn_points": 42,
+                "source_priority": 1,
+            }],
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["company"], "Author DB")
+        self.assertEqual(merged[0]["hn_points"], 42)
+        self.assertIn("personalized", merged[0]["summary"])
+
+    def test_author_source_still_pushes_when_all_rss_feeds_fail(self):
+        args = Mock(
+            tags="",
+            data=Path("unused.json"),
+            date=date(2026, 8, 7),
+            limit=5,
+            lookback_days=7,
+            dry_run=True,
+        )
+        fresh = {
+            "company": "Meta",
+            "title": "Production Ads Recommendation Ranking",
+            "summary": "An ads ranking and recommendation system.",
+            "link": "https://example.com/fresh",
+            "tags": ["Ads Ranking"],
+            "date": "2026-08-05",
+            "source_priority": 3,
+        }
+        with patch.object(industry_daily_push, "parse_args", return_value=args), \
+             patch.object(industry_daily_push, "fetch_live_articles", return_value=[]), \
+             patch.object(industry_daily_push, "load_articles", return_value=[]), \
+             patch.object(industry_daily_push, "fetch_upstream_articles", return_value=[fresh]), \
+             patch.object(industry_daily_push, "fetch_hn_industry_articles", return_value=[]), \
+             patch.object(industry_daily_push, "fetch_hn_metrics", return_value={}), \
+             patch.object(industry_daily_push, "send_card") as send:
+            result = industry_daily_push.main()
+
+        self.assertEqual(result, 0)
+        self.assertIn("Production Ads Recommendation Ranking", send.call_args.args[1])
 
     def test_selects_weekly_articles_by_public_metrics(self):
         articles = [
@@ -191,6 +269,30 @@ class ConferencePushTests(unittest.TestCase):
 
         self.assertEqual([paper["year"] for paper in selected], [2026, 2026])
         self.assertEqual(selected[0]["citation_count"], 8)
+
+    @patch("paperBotV2.conf_summary.daily_push.requests.get")
+    def test_hydrates_missing_conference_abstract_from_arxiv(self, get):
+        response = Mock()
+        response.text = (
+            '<html><meta name="citation_abstract" '
+            'content="A unified industrial recommendation ranking model."></html>'
+        )
+        get.return_value = response
+        papers = online_conference_candidates([
+            {
+                "title": "OneTrans for Industrial Recommender Systems",
+                "abstract": "",
+                "year": 2026,
+                "venue": "WWW",
+                "externalIds": {"DOI": "10.1/example", "ArXiv": "2510.26104"},
+            }
+        ])
+
+        hydrate_conference_abstracts(papers)
+
+        self.assertEqual(papers[0]["arxiv_id"], "2510.26104")
+        self.assertIn("industrial recommendation", papers[0]["paper_abstract"])
+        self.assertIn("https://arxiv.org/abs/2510.26104", get.call_args.args[0])
 
     def test_rejects_generic_retrieval_and_uses_english(self):
         papers = online_conference_candidates([
@@ -637,12 +739,37 @@ class PublicMetricsTests(unittest.TestCase):
         self.assertEqual(metrics["https://example.com/post"]["hn_points"], 42)
 
     @patch("paperBotV2.metrics.requests.request")
+    def test_discovers_relevant_hacker_news_article_sources(self, request):
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "hits": [{
+                "url": "https://engineering.example.com/recsys?utm_source=hn",
+                "title": "Production Recommender System Ranking",
+                "created_at": "2026-08-07T12:00:00Z",
+                "points": 21,
+                "num_comments": 3,
+                "objectID": "456",
+            }]
+        }
+        request.return_value = response
+
+        articles = fetch_hn_industry_articles(
+            datetime(2026, 8, 1, tzinfo=timezone.utc), queries=["recommender system"]
+        )
+
+        self.assertEqual(len(articles), 1)
+        self.assertEqual(articles[0]["date"], "2026-08-07")
+        self.assertEqual(articles[0]["hn_points"], 21)
+
+    @patch("paperBotV2.metrics.requests.request")
     def test_fetches_semantic_scholar_citations(self, request):
         response = Mock(status_code=200)
         response.json.return_value = [{
+            "abstract": "A recommendation ranking abstract.",
             "citationCount": 5,
             "influentialCitationCount": 2,
             "publicationDate": "2026-08-02",
+            "externalIds": {"ArXiv": "2608.00001"},
         }]
         request.return_value = response
 
@@ -652,6 +779,8 @@ class PublicMetricsTests(unittest.TestCase):
         self.assertEqual(
             metrics["ARXIV:2608.00001"]["influential_citation_count"], 2
         )
+        self.assertEqual(metrics["ARXIV:2608.00001"]["arxiv_id"], "2608.00001")
+        self.assertIn("recommendation ranking", metrics["ARXIV:2608.00001"]["paper_abstract"])
 
     @patch("paperBotV2.metrics.requests.request")
     def test_semantic_scholar_splits_a_rejected_batch(self, request):
