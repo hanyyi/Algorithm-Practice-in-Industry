@@ -20,29 +20,51 @@ STRONG_PATTERNS = (
     r"\bctr\s+prediction\b",
     r"\bcvr\s+prediction\b",
     r"\bconversion[- ]rate\s+prediction\b",
-    r"\blearning\s+to\s+rank\b",
     r"\bfeed\s+ranking\b",
     r"\bads?\s+(?:ranking|recommendation)\b",
     r"\badvertising\s+(?:ranking|recommendation)\b",
     r"\bpersonalized\s+(?:search|ranking|retrieval)\b",
     r"\bsearch\s+(?:ranking|reranking|re-ranking|retrieval)\b",
+    r"\b(?:digital\s+)?product\s+advisors?\b",
+    r"\bconversational\s+commerce\b",
 )
 STRONG_RE = tuple(re.compile(pattern, re.IGNORECASE) for pattern in STRONG_PATTERNS)
 
-RECOMMENDATION_RE = re.compile(r"\brecommendations?\b", re.IGNORECASE)
-USER_ITEM_CONTEXT = (
-    "user",
-    "item",
-    "content",
-    "feed",
-    "click",
-    "conversion",
-    "personalized",
-    "personalization",
-    "e-commerce",
-    "ecommerce",
+TASK_TITLE_RE = re.compile(
+    r"\b(?:recommen(?:dation|der)|rank(?:ing)?|rerank(?:ing)?|re-ranking|"
+    r"retrieval|matching|search|ads?|advertising|feed|click|conversion|"
+    r"candidate\s+generation|product\s+advisors?|conversational\s+commerce)\b",
+    re.IGNORECASE,
 )
-RANKING_ACTIONS = ("ranking", "reranking", "re-ranking", "retrieval", "matching")
+LEARNING_TO_RANK_RE = re.compile(r"\blearning\s+to\s+rank\b", re.IGNORECASE)
+LTR_DOMAIN_RE = re.compile(
+    r"\b(?:web\s+search|search\s+(?:engine|results?|ranking)|"
+    r"information\s+retrieval|recommen(?:dation|der)|ads?|"
+    r"advertising|feed|click|conversion|user[- ]item)\b",
+    re.IGNORECASE,
+)
+
+
+def _qualifies(title_text: str, body_text: str) -> bool:
+    """Require an explicit user-facing ranking/recommendation task.
+
+    A domain phrase buried in an otherwise generic abstract is insufficient.
+    This rejects papers that merely use recommendation experiments, generic
+    RAG/retrieval, financial personalization, or learning-to-rank terminology
+    for unrelated scientific workloads.
+    """
+
+    if any(pattern.search(title_text) for pattern in STRONG_RE):
+        return True
+    if (
+        LEARNING_TO_RANK_RE.search(title_text)
+        and LTR_DOMAIN_RE.search(body_text)
+    ):
+        return True
+    return bool(
+        TASK_TITLE_RE.search(title_text)
+        and any(pattern.search(body_text) for pattern in STRONG_RE)
+    )
 
 
 def recommendation_relevance_score(
@@ -59,18 +81,15 @@ def recommendation_relevance_score(
     body_text = " ".join(
         [title_text, str(summary or "").lower(), " ".join(str(tag).lower() for tag in tags)]
     )
+    if not _qualifies(title_text, body_text):
+        return 0
+
     score = 0
     for pattern in STRONG_RE:
         if pattern.search(body_text):
             score += 6 if pattern.search(title_text) else 4
-
-    has_recommendation = bool(RECOMMENDATION_RE.search(body_text))
-    context_hits = sum(word in body_text for word in USER_ITEM_CONTEXT)
-    action_hits = sum(word in body_text for word in RANKING_ACTIONS)
-    if has_recommendation and context_hits:
-        score += 5 + min(context_hits, 3)
-    if action_hits and context_hits >= 2:
-        score += 4 + min(action_hits, 2)
+    if LEARNING_TO_RANK_RE.search(title_text) and LTR_DOMAIN_RE.search(body_text):
+        score += 6
     return score
 
 
